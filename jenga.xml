@@ -3,7 +3,11 @@
 
     <compiler angle="degree" coordinate="local"/>
 
-    <option gravity="0 0 -9.81" timestep="0.005" iterations="100"/>
+    <option gravity="0 0 -9.81" timestep="0.005" iterations="100" solver="Newton" />
+
+    <default>
+        <geom density="650" />
+    </default>
 
     <worldbody>
 
@@ -18,631 +22,631 @@
 
         <!-- LAYER 1 -->
                 
-        <body name="b1_1" pos="-0.51 0 0.1" >
+        <body name="b1_1" pos="-0.51 0 0.15" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.224 0.001 0.0001"
+                friction="0.355 0.01 0.001"
             />
         </body>
 
-        <body name="b1_2" pos="0 0 0.1" >
+        <body name="b1_2" pos="0 0 0.15" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.152 0.001 0.0001"
+                friction="0.355 0.01 0.001"
             />
         </body>
 
-        <body name="b1_3" pos="0.51 0 0.1" >
+        <body name="b1_3" pos="0.51 0 0.15" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.153 0.001 0.0001"
+                friction="0.125 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 2 -->
                 
-        <body name="b2_1" pos="0 0.51 0.5" euler="0 0 90">
+        <body name="b2_1" pos="0 0.51 0.45" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.348 0.001 0.0001"
+                friction="0.404 0.01 0.001"
             />
         </body>
 
-        <body name="b2_2" pos="0 0 0.5" euler="0 0 90">
+        <body name="b2_2" pos="0 0 0.45" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.554 0.001 0.0001"
+                friction="0.137 0.01 0.001"
             />
         </body>
 
-        <body name="b2_3" pos="0 -0.51 0.5" euler="0 0 90">
+        <body name="b2_3" pos="0 -0.51 0.45" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.416 0.001 0.0001"
+                friction="0.134 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 3 -->
                 
-        <body name="b3_1" pos="-0.51 0 0.9" >
+        <body name="b3_1" pos="-0.51 0 0.75" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.151 0.001 0.0001"
+                friction="0.542 0.01 0.001"
             />
         </body>
 
-        <body name="b3_2" pos="0 0 0.9" >
+        <body name="b3_2" pos="0 0 0.75" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.110 0.001 0.0001"
+                friction="0.241 0.01 0.001"
             />
         </body>
 
-        <body name="b3_3" pos="0.51 0 0.9" >
+        <body name="b3_3" pos="0.51 0 0.75" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.215 0.001 0.0001"
+                friction="0.324 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 4 -->
                 
-        <body name="b4_1" pos="0 0.51 1.3" euler="0 0 90">
+        <body name="b4_1" pos="0 0.51 1.05" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.596 0.001 0.0001"
+                friction="0.376 0.01 0.001"
             />
         </body>
 
-        <body name="b4_2" pos="0 0 1.3" euler="0 0 90">
+        <body name="b4_2" pos="0 0 1.05" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.494 0.001 0.0001"
+                friction="0.383 0.01 0.001"
             />
         </body>
 
-        <body name="b4_3" pos="0 -0.51 1.3" euler="0 0 90">
+        <body name="b4_3" pos="0 -0.51 1.05" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.520 0.001 0.0001"
+                friction="0.262 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 5 -->
                 
-        <body name="b5_1" pos="-0.51 0 1.7" >
+        <body name="b5_1" pos="-0.51 0 1.35" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.119 0.001 0.0001"
+                friction="0.174 0.01 0.001"
             />
         </body>
 
-        <body name="b5_2" pos="0 0 1.7" >
+        <body name="b5_2" pos="0 0 1.35" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.218 0.001 0.0001"
+                friction="0.178 0.01 0.001"
             />
         </body>
 
-        <body name="b5_3" pos="0.51 0 1.7" >
+        <body name="b5_3" pos="0.51 0 1.35" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.363 0.001 0.0001"
+                friction="0.515 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 6 -->
                 
-        <body name="b6_1" pos="0 0.51 2.1" euler="0 0 90">
+        <body name="b6_1" pos="0 0.51 1.65" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.529 0.001 0.0001"
+                friction="0.341 0.01 0.001"
             />
         </body>
 
-        <body name="b6_2" pos="0 0 2.1" euler="0 0 90">
+        <body name="b6_2" pos="0 0 1.65" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.182 0.001 0.0001"
+                friction="0.317 0.01 0.001"
             />
         </body>
 
-        <body name="b6_3" pos="0 -0.51 2.1" euler="0 0 90">
+        <body name="b6_3" pos="0 -0.51 1.65" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.566 0.001 0.0001"
+                friction="0.125 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 7 -->
                 
-        <body name="b7_1" pos="-0.51 0 2.5" >
+        <body name="b7_1" pos="-0.51 0 1.95" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.148 0.001 0.0001"
+                friction="0.397 0.01 0.001"
             />
         </body>
 
-        <body name="b7_2" pos="0 0 2.5" >
+        <body name="b7_2" pos="0 0 1.95" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.494 0.001 0.0001"
+                friction="0.355 0.01 0.001"
             />
         </body>
 
-        <body name="b7_3" pos="0.51 0 2.5" >
+        <body name="b7_3" pos="0.51 0 1.95" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.243 0.001 0.0001"
+                friction="0.424 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 8 -->
                 
-        <body name="b8_1" pos="0 0.51 2.9" euler="0 0 90">
+        <body name="b8_1" pos="0 0.51 2.25" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.367 0.001 0.0001"
+                friction="0.385 0.01 0.001"
             />
         </body>
 
-        <body name="b8_2" pos="0 0 2.9" euler="0 0 90">
+        <body name="b8_2" pos="0 0 2.25" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.550 0.001 0.0001"
+                friction="0.522 0.01 0.001"
             />
         </body>
 
-        <body name="b8_3" pos="0 -0.51 2.9" euler="0 0 90">
+        <body name="b8_3" pos="0 -0.51 2.25" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.475 0.001 0.0001"
+                friction="0.414 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 9 -->
                 
-        <body name="b9_1" pos="-0.51 0 3.3" >
+        <body name="b9_1" pos="-0.51 0 2.55" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.303 0.001 0.0001"
+                friction="0.139 0.01 0.001"
             />
         </body>
 
-        <body name="b9_2" pos="0 0 3.3" >
+        <body name="b9_2" pos="0 0 2.55" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.284 0.001 0.0001"
+                friction="0.583 0.01 0.001"
             />
         </body>
 
-        <body name="b9_3" pos="0.51 0 3.3" >
+        <body name="b9_3" pos="0.51 0 2.55" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.334 0.001 0.0001"
+                friction="0.130 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 10 -->
                 
-        <body name="b10_1" pos="0 0.51 3.7" euler="0 0 90">
+        <body name="b10_1" pos="0 0.51 2.85" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.321 0.001 0.0001"
+                friction="0.339 0.01 0.001"
             />
         </body>
 
-        <body name="b10_2" pos="0 0 3.7" euler="0 0 90">
+        <body name="b10_2" pos="0 0 2.85" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.597 0.001 0.0001"
+                friction="0.544 0.01 0.001"
             />
         </body>
 
-        <body name="b10_3" pos="0 -0.51 3.7" euler="0 0 90">
+        <body name="b10_3" pos="0 -0.51 2.85" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.356 0.001 0.0001"
+                friction="0.540 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 11 -->
                 
-        <body name="b11_1" pos="-0.51 0 4.1" >
+        <body name="b11_1" pos="-0.51 0 3.15" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.477 0.001 0.0001"
+                friction="0.325 0.01 0.001"
             />
         </body>
 
-        <body name="b11_2" pos="0 0 4.1" >
+        <body name="b11_2" pos="0 0 3.15" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.376 0.001 0.0001"
+                friction="0.195 0.01 0.001"
             />
         </body>
 
-        <body name="b11_3" pos="0.51 0 4.1" >
+        <body name="b11_3" pos="0.51 0 3.15" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.496 0.001 0.0001"
+                friction="0.304 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 12 -->
                 
-        <body name="b12_1" pos="0 0.51 4.5" euler="0 0 90">
+        <body name="b12_1" pos="0 0.51 3.45" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.545 0.001 0.0001"
+                friction="0.351 0.01 0.001"
             />
         </body>
 
-        <body name="b12_2" pos="0 0 4.5" euler="0 0 90">
+        <body name="b12_2" pos="0 0 3.45" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.371 0.001 0.0001"
+                friction="0.403 0.01 0.001"
             />
         </body>
 
-        <body name="b12_3" pos="0 -0.51 4.5" euler="0 0 90">
+        <body name="b12_3" pos="0 -0.51 3.45" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.224 0.001 0.0001"
+                friction="0.497 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 13 -->
                 
-        <body name="b13_1" pos="-0.51 0 4.9" >
+        <body name="b13_1" pos="-0.51 0 3.75" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.312 0.001 0.0001"
+                friction="0.516 0.01 0.001"
             />
         </body>
 
-        <body name="b13_2" pos="0 0 4.9" >
+        <body name="b13_2" pos="0 0 3.75" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.469 0.001 0.0001"
+                friction="0.210 0.01 0.001"
             />
         </body>
 
-        <body name="b13_3" pos="0.51 0 4.9" >
+        <body name="b13_3" pos="0.51 0 3.75" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.282 0.001 0.0001"
+                friction="0.565 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 14 -->
                 
-        <body name="b14_1" pos="0 0.51 5.3" euler="0 0 90">
+        <body name="b14_1" pos="0 0.51 4.05" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.229 0.001 0.0001"
+                friction="0.179 0.01 0.001"
             />
         </body>
 
-        <body name="b14_2" pos="0 0 5.3" euler="0 0 90">
+        <body name="b14_2" pos="0 0 4.05" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.195 0.001 0.0001"
+                friction="0.451 0.01 0.001"
             />
         </body>
 
-        <body name="b14_3" pos="0 -0.51 5.3" euler="0 0 90">
+        <body name="b14_3" pos="0 -0.51 4.05" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.538 0.001 0.0001"
+                friction="0.415 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 15 -->
                 
-        <body name="b15_1" pos="-0.51 0 5.7" >
+        <body name="b15_1" pos="-0.51 0 4.35" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.247 0.001 0.0001"
+                friction="0.576 0.01 0.001"
             />
         </body>
 
-        <body name="b15_2" pos="0 0 5.7" >
+        <body name="b15_2" pos="0 0 4.35" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.137 0.001 0.0001"
+                friction="0.287 0.01 0.001"
             />
         </body>
 
-        <body name="b15_3" pos="0.51 0 5.7" >
+        <body name="b15_3" pos="0.51 0 4.35" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.175 0.001 0.0001"
+                friction="0.468 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 16 -->
                 
-        <body name="b16_1" pos="0 0.51 6.1" euler="0 0 90">
+        <body name="b16_1" pos="0 0.51 4.65" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.271 0.001 0.0001"
+                friction="0.423 0.01 0.001"
             />
         </body>
 
-        <body name="b16_2" pos="0 0 6.1" euler="0 0 90">
+        <body name="b16_2" pos="0 0 4.65" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.121 0.001 0.0001"
+                friction="0.417 0.01 0.001"
             />
         </body>
 
-        <body name="b16_3" pos="0 -0.51 6.1" euler="0 0 90">
+        <body name="b16_3" pos="0 -0.51 4.65" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.309 0.001 0.0001"
+                friction="0.252 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 17 -->
                 
-        <body name="b17_1" pos="-0.51 0 6.5" >
+        <body name="b17_1" pos="-0.51 0 4.95" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.494 0.001 0.0001"
+                friction="0.284 0.01 0.001"
             />
         </body>
 
-        <body name="b17_2" pos="0 0 6.5" >
+        <body name="b17_2" pos="0 0 4.95" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.163 0.001 0.0001"
+                friction="0.394 0.01 0.001"
             />
         </body>
 
-        <body name="b17_3" pos="0.51 0 6.5" >
+        <body name="b17_3" pos="0.51 0 4.95" >
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.461 0.001 0.0001"
+                friction="0.221 0.01 0.001"
             />
         </body>
 
         <!-- LAYER 18 -->
                 
-        <body name="b18_1" pos="0 0.51 6.9" euler="0 0 90">
+        <body name="b18_1" pos="0 0.51 5.25" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.260 0.001 0.0001"
+                friction="0.169 0.01 0.001"
             />
         </body>
 
-        <body name="b18_2" pos="0 0 6.9" euler="0 0 90">
+        <body name="b18_2" pos="0 0 5.25" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.125 0.001 0.0001"
+                friction="0.376 0.01 0.001"
             />
         </body>
 
-        <body name="b18_3" pos="0 -0.51 6.9" euler="0 0 90">
+        <body name="b18_3" pos="0 -0.51 5.25" euler="0 0 90">
             <joint type="free"/>
 
             <geom
                 type="box"
                 size="0.25 0.75 0.15"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.597 0.001 0.0001"
+                friction="0.233 0.01 0.001"
             />
         </body>
 
