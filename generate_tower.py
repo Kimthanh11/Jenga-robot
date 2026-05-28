@@ -7,8 +7,8 @@ BLOCKS_PER_LAYER = 3
 BLOCK_SIZE = (0.25, 0.75, 0.15)
 SIDE_SPACING = 0.51
 
-START_Z = 0.1
-LAYER_HEIGHT = 0.40
+START_Z = BLOCK_SIZE[2]
+LAYER_HEIGHT = 2 * BLOCK_SIZE[2]
 
 GRAVITY = (0, 0, -9.81)
 PLANE_SIZE = (3, 3, 0.1)
@@ -30,7 +30,11 @@ parts = [f"""
 
     <compiler angle="degree" coordinate="local"/>
 
-    <option gravity="{vec(GRAVITY)}" timestep="0.005" iterations="100"/>
+    <option gravity="{vec(GRAVITY)}" timestep="0.005" iterations="100" solver="Newton" />
+
+    <default>
+        <geom density="650" />
+    </default>
 
     <worldbody>
 
@@ -72,7 +76,8 @@ for layer in range(1, LAYERS + 1):
 
         random_friction = random.uniform(0.1, 0.6)
 
-        friction = f'friction="{random_friction:.3f} 0.001 0.0001"'
+        # paramter meaning: sliding (fritcion against sliding), torsional (rotatinoal force, block rotates harder) rolling(friction aganist rolling, mostly not relevant for blocks?)
+        friction = f'friction="{random_friction:.3f} 0.01 0.001"'
 
         parts.append(f"""
         <body name="b{layer}_{block}" pos="{x:g} {y:g} {z:g}" {euler}>
