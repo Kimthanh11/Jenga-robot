@@ -7,7 +7,7 @@ BLOCKS_PER_LAYER = 3
 BLOCK_SIZE = (0.25, 0.75, 0.15)
 SIDE_SPACING = 0.51
 
-START_Z = 2.1
+START_Z = 0.1
 LAYER_HEIGHT = 0.40
 
 GRAVITY = (0, 0, -9.81)
@@ -30,7 +30,7 @@ parts = [f"""
 
     <compiler angle="degree" coordinate="local"/>
 
-    <option gravity="{vec(GRAVITY)}" timestep="0.005" iterations="20"/>
+    <option gravity="{vec(GRAVITY)}" timestep="0.005" iterations="100"/>
 
     <worldbody>
 
