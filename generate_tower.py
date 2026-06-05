@@ -19,7 +19,7 @@ PLANE_SIZE = (0.3, 0.3, 0.01)
 PLANE_COLOR = (0.96, 0.93, 0.73, 1)
 
 # Friction properties: [Sliding friction, Torsional friction, Rolling friction]
-FRICTION = (0.3, 0.001, 0.0001)
+FRICTION = (0.8, 0.001, 0.0001)
 
 COLOR_A = (0.68, 0.85, 0.90, 1.0)
 COLOR_B = (0.96, 0.96, 0.95, 1.0)
@@ -41,8 +41,7 @@ parts = [f"""
         <geom density="650"
               margin="0.0005"
               gap="0.0005"
-              solref="0.005 1"
-              solimp="0.95 0.99 0.001" />
+/>
     </default>
 
     <worldbody>
@@ -56,7 +55,39 @@ parts = [f"""
         />
 
         <body name="hook" pos="0.15 0.05 0.16">
-            <joint name="hook_slide" type="slide" axis="1 0 0"/>
+            <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook2" pos="0.15 -0.05 0.107">
+            <joint name="hook_slide2" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook3" pos="0.15 0 0.107">
+            <joint name="hook_slide3" type="slide" axis="1 0 0" damping="2"/>
 
             <geom type="box"
                 size="0.04 0.005 0.01"
@@ -102,10 +133,10 @@ for layer in range(1, LAYERS + 1):
             color = COLOR_B if block in (1, 3) else COLOR_A
 
         # Randomize sliding friction
-        random_sliding_friction = random.uniform(0.2, 0.5)
+        random_sliding_friction = random.uniform(0.2, 0.4)
 
         # Randomize torsional friction 
-        random_torsional_friction = random.uniform(0.2, 0.5)
+        random_torsional_friction = random.uniform(0.01, 0.06)
 
         friction = f'friction="{random_sliding_friction:.3f} {random_torsional_friction:.3f} 0.001"'
 
@@ -134,7 +165,9 @@ parts.append("""
     </worldbody>
 
     <actuator>
-        <motor joint="hook_slide" ctrlrange="-1 1" gear="100"/>
+        <motor joint="hook_slide" ctrlrange="-1 1" gear="5"/>
+        <motor joint="hook_slide2" ctrlrange="-1 1" gear="5"/>
+        <motor joint="hook_slide3" ctrlrange="-1 1" gear="5"/>
     </actuator>
 
 </mujoco>
