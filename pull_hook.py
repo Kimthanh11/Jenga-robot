@@ -1,28 +1,31 @@
-import time
 import mujoco
 import mujoco.viewer
+
 
 model = mujoco.MjModel.from_xml_path("jenga.xml")
 data = mujoco.MjData(model)
 
-#get the id of the joint "hook_slide" and vonvert it from name to id
-joint_id = mujoco.mj_name2id(
-    model,
-    mujoco.mjtObj.mjOBJ_JOINT,
-    "hook_slide"
-)
+print("Number of actuators:", model.nu)
 
-#get the position/index of the joint out of the data.qpos array
-qpos_addr = model.jnt_qposadr[joint_id]
+SETTLE_TIME = 1.0
+PUSH_DURATION = 40
+PAUSE_DURATION = 1.0
+PUSH_CTRL = -1.0
+
+schedule = [
+    (0, 1.0, 5.0),
+    (1, 6.0, 20.0),
+    (2, 21.0, 87.0),
+]
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
+        data.ctrl[:] = 0.0
 
-        # pull outward to the right
-        if data.time < 5.0:
-            data.ctrl[0] = -1
-
+        for actuator_id, start_time, end_time in schedule:
+            if start_time <= data.time < end_time and actuator_id < model.nu:
+                data.ctrl[actuator_id] = PUSH_CTRL
+                break
 
         mujoco.mj_step(model, data)
         viewer.sync()
-        #time.sleep(model.opt.timestep)

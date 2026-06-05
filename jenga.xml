@@ -9,8 +9,7 @@
         <geom density="650"
               margin="0.0005"
               gap="0.0005"
-              solref="0.005 1"
-              solimp="0.95 0.99 0.001" />
+/>
     </default>
 
     <worldbody>
@@ -20,11 +19,43 @@
             type="plane"
             size="0.3 0.3 0.01"
             rgba="0.96 0.93 0.73 1"
-            friction="0.3 0.001 0.0001"
+            friction="0.8 0.001 0.0001"
         />
 
         <body name="hook" pos="0.15 0.05 0.16">
-            <joint name="hook_slide" type="slide" axis="1 0 0"/>
+            <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook2" pos="0.15 -0.05 0.107">
+            <joint name="hook_slide2" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook3" pos="0.15 0 0.107">
+            <joint name="hook_slide3" type="slide" axis="1 0 0" damping="2"/>
 
             <geom type="box"
                 size="0.04 0.005 0.01"
@@ -47,7 +78,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.453 0.427 0.001"
+                friction="0.284 0.048 0.001"
             />
         </body>
 
@@ -58,7 +89,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.326 0.278 0.001"
+                friction="0.242 0.023 0.001"
             />
         </body>
 
@@ -69,7 +100,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.353 0.321 0.001"
+                friction="0.251 0.030 0.001"
             />
         </body>
 
@@ -81,7 +112,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.435 0.291 0.001"
+                friction="0.278 0.025 0.001"
             />
         </body>
 
@@ -92,7 +123,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.343 0.375 0.001"
+                friction="0.248 0.039 0.001"
             />
         </body>
 
@@ -103,7 +134,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.472 0.351 0.001"
+                friction="0.291 0.035 0.001"
             />
         </body>
 
@@ -115,7 +146,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.285 0.427 0.001"
+                friction="0.228 0.048 0.001"
             />
         </body>
 
@@ -126,7 +157,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.386 0.275 0.001"
+                friction="0.262 0.023 0.001"
             />
         </body>
 
@@ -137,7 +168,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.473 0.495 0.001"
+                friction="0.291 0.059 0.001"
             />
         </body>
 
@@ -149,7 +180,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.443 0.471 0.001"
+                friction="0.281 0.055 0.001"
             />
         </body>
 
@@ -160,7 +191,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.293 0.419 0.001"
+                friction="0.231 0.046 0.001"
             />
         </body>
 
@@ -171,7 +202,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.470 0.405 0.001"
+                friction="0.290 0.044 0.001"
             />
         </body>
 
@@ -183,7 +214,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.342 0.230 0.001"
+                friction="0.247 0.015 0.001"
             />
         </body>
 
@@ -194,7 +225,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.330 0.383 0.001"
+                friction="0.243 0.041 0.001"
             />
         </body>
 
@@ -205,7 +236,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.474 0.490 0.001"
+                friction="0.291 0.058 0.001"
             />
         </body>
 
@@ -217,7 +248,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.343 0.460 0.001"
+                friction="0.248 0.053 0.001"
             />
         </body>
 
@@ -228,7 +259,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.278 0.442 0.001"
+                friction="0.226 0.050 0.001"
             />
         </body>
 
@@ -239,7 +270,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.365 0.204 0.001"
+                friction="0.255 0.011 0.001"
             />
         </body>
 
@@ -251,7 +282,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.416 0.320 0.001"
+                friction="0.272 0.030 0.001"
             />
         </body>
 
@@ -262,7 +293,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.447 0.400 0.001"
+                friction="0.282 0.043 0.001"
             />
         </body>
 
@@ -273,7 +304,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.200 0.348 0.001"
+                friction="0.200 0.035 0.001"
             />
         </body>
 
@@ -285,7 +316,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.460 0.273 0.001"
+                friction="0.287 0.022 0.001"
             />
         </body>
 
@@ -296,7 +327,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.298 0.461 0.001"
+                friction="0.233 0.054 0.001"
             />
         </body>
 
@@ -307,7 +338,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.257 0.370 0.001"
+                friction="0.219 0.038 0.001"
             />
         </body>
 
@@ -319,7 +350,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.272 0.490 0.001"
+                friction="0.224 0.058 0.001"
             />
         </body>
 
@@ -330,7 +361,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.96 0.96 0.95 1"
-                friction="0.441 0.334 0.001"
+                friction="0.280 0.032 0.001"
             />
         </body>
 
@@ -341,14 +372,16 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.224 0.296 0.001"
+                friction="0.208 0.026 0.001"
             />
         </body>
 
     </worldbody>
 
     <actuator>
-        <motor joint="hook_slide" ctrlrange="-1 1" gear="100"/>
+        <motor joint="hook_slide" ctrlrange="-1 1" gear="8"/>
+        <motor joint="hook_slide2" ctrlrange="-1 1" gear="5"/>
+        <motor joint="hook_slide3" ctrlrange="-1 1" gear="5"/>
     </actuator>
 
 </mujoco>
