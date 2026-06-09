@@ -133,12 +133,14 @@ for layer in range(1, LAYERS + 1):
             color = COLOR_B if block in (1, 3) else COLOR_A
 
         # Randomize sliding friction
-        random_sliding_friction = random.uniform(0.2, 0.4)
+        random_sliding_friction = random.uniform(0.25, 0.5)
 
         # Randomize torsional friction 
         random_torsional_friction = random.uniform(0.01, 0.06)
 
-        friction = f'friction="{random_sliding_friction:.3f} {random_torsional_friction:.3f} 0.001"'
+        rolling_friction = 0.0015
+
+        friction = f'friction="{random_sliding_friction:.3f} {random_torsional_friction:.3f} {rolling_friction}"'
 
         # --- THE MUJOCO HALF-SIZE CONVERSION ---
         # Crucial step: MuJoCo box geoms measure from their center out to their edge.
@@ -161,6 +163,7 @@ for layer in range(1, LAYERS + 1):
 """)
 
 # Append the closing root elements to finalize the valid XML pattern
+# gear="5" means the motor can push with a maximum force of 5N
 parts.append("""
     </worldbody>
 
