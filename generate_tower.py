@@ -54,53 +54,7 @@ parts = [f"""
             {'friction="' + vec(FRICTION) + '"'}
         />
 
-        <body name="hook" pos="0.15 0.05 0.16">
-            <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
-
-            <geom type="box"
-                size="0.04 0.005 0.01"
-                pos="0 0 0"
-                rgba="0.1 0.1 0.9 1"
-                density="2000"/>
-
-            <geom type="box"
-                size="0.01 0.01 0.01"
-                pos="-0.05 0 0"
-                rgba="1 0 0 1"
-                density="2000"/>
-        </body>
-
-        <body name="hook2" pos="0.15 -0.05 0.107">
-            <joint name="hook_slide2" type="slide" axis="1 0 0" damping="2"/>
-
-            <geom type="box"
-                size="0.04 0.005 0.01"
-                pos="0 0 0"
-                rgba="0.1 0.1 0.9 1"
-                density="2000"/>
-
-            <geom type="box"
-                size="0.01 0.01 0.01"
-                pos="-0.05 0 0"
-                rgba="1 0 0 1"
-                density="2000"/>
-        </body>
-
-        <body name="hook3" pos="0.15 0 0.107">
-            <joint name="hook_slide3" type="slide" axis="1 0 0" damping="2"/>
-
-            <geom type="box"
-                size="0.04 0.005 0.01"
-                pos="0 0 0"
-                rgba="0.1 0.1 0.9 1"
-                density="2000"/>
-
-            <geom type="box"
-                size="0.01 0.01 0.01"
-                pos="-0.05 0 0"
-                rgba="1 0 0 1"
-                density="2000"/>
-        </body>
+        
 """]
 
 # Generate the Jenga blocks layer-by-layer
@@ -162,6 +116,65 @@ for layer in range(1, LAYERS + 1):
         </body>
 """)
 
+# Add pushers ---------------------------------------------------------------
+def block_center(layer, position):
+    z = START_Z + (layer - 1) * LAYER_HEIGHT
+
+    if layer % 2 == 1:
+        x = [-SIDE_SPACING, 0, SIDE_SPACING][position - 1]
+        y = 0
+    else:
+        x = 0
+        y = [SIDE_SPACING, 0, -SIDE_SPACING][position - 1]
+
+    return x, y, z
+
+def add_hook(parts, layer, position, name):
+    x, y, z = block_center(layer, position)
+
+    offset = 0.15
+
+    if layer % 2 == 0:
+        # odd layer: push along X
+        hook_x = offset
+        hook_y = y
+        angle = 0
+    else:
+        # even layer: push along Y
+        hook_x = x
+        hook_y = -offset
+        angle = -90
+
+    parts.append(f"""
+        <body name="{name}"
+              pos="{hook_x:g} {hook_y:g} {z:g}"
+              euler="0 0 {angle}">
+            <joint name="{name}" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+""")
+    
+hooks = [
+    (8, 3),
+    (7, 1),
+    (1, 2),
+]
+
+for i, (layer, position) in enumerate(hooks, start=1):
+    joint_name = "hook_slide" if i == 1 else f"hook_slide{i}"
+    add_hook(parts, layer, position, joint_name)
+
 # Append the closing root elements to finalize the valid XML pattern
 # gear="5" means the motor can push with a maximum force of 5N
 parts.append("""
@@ -175,6 +188,9 @@ parts.append("""
 
 </mujoco>
 """)
+
+# ---------------------------------------------------------------
+
 
 xml = "".join(parts)
 
