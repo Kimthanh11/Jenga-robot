@@ -1,5 +1,6 @@
 import mujoco
 import mujoco.viewer
+import time
 
 
 model = mujoco.MjModel.from_xml_path("jenga.xml")
@@ -13,9 +14,9 @@ PAUSE_DURATION = 1.0
 PUSH_CTRL = -1.0
 
 schedule = [
-    (0, 1.0, 5.0),
-    (1, 6.0, 20.0),
-    (2, 21.0, 87.0),
+    (0, 16.0, 21.0),
+    (1, 22.0, 28.0),
+    (2, 29.0, 87.0),
 ]
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
