@@ -1,0 +1,4 @@
+# MuJoCo 3.2.3: pinned because newer versions (3.9.x) raise a fatal
+# "mj_narrowphase: collision function returned 9 contacts ... expected at most 8"
+# error on the flush face-to-face box-box contacts between adjacent Jenga blocks.
+mujoco==3.2.3

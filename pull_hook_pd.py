@@ -1,5 +1,29 @@
+import argparse
+import logging
+import sys
+
 import mujoco
 import mujoco.viewer
+
+from tower_state import TowerState
+
+
+# --- logging: stdout by default, optional file via --log-file -----------------
+parser = argparse.ArgumentParser(description="PD-controlled Jenga pusher")
+parser.add_argument(
+    "--log-file",
+    default=None,
+    help="write logs to this file instead of stdout (default: stdout)",
+)
+args = parser.parse_args()
+
+handler = (
+    logging.FileHandler(args.log_file, mode="w")
+    if args.log_file
+    else logging.StreamHandler(sys.stdout)
+)
+logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[handler])
+log = logging.getLogger("jenga")
 
 
 model = mujoco.MjModel.from_xml_path("jenga.xml")
@@ -31,8 +55,11 @@ KD = 10.0
 MAX_FORCE = 5.0
 TARGET_QPOS = -0.20
 
+SETTLE_TIME = 1.0
+PRINT_EVERY = 0.5  # seconds between state printouts
+
 schedule = [
-    (0, 1.0, 10.0),  
+    (0, 1.0, 10.0),
     (1, 11.0, 51.0),
     (2, 52.0, 92.0),
 ]
@@ -51,6 +78,10 @@ def apply_position_controller(hook_id, target_qpos):
     data.qfrc_applied[dof_addr] = clamp(force, -MAX_FORCE, MAX_FORCE)
 
 
+state = TowerState(model, data)
+recorded = False
+next_print = 0.0
+
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
         data.ctrl[:] = 0.0
@@ -62,4 +93,16 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                 break
 
         mujoco.mj_step(model, data)
+
+        # Snapshot the settled tower once, just before pushing begins.
+        if not recorded and data.time >= SETTLE_TIME:
+            state.record_initial()
+            recorded = True
+            log.info(f"[{data.time:5.1f}s] tower settled, reference recorded")
+
+        # Print live state readings at a fixed cadence.
+        if recorded and data.time >= next_print:
+            log.info(f"[{data.time:5.1f}s] {state.summary()}")
+            next_print = data.time + PRINT_EVERY
+
         viewer.sync()
