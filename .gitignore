@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 MUJOCO_LOG.TXT
 .vscode/
+
+logs/
+wandb/
+*.pt
+*.tfevents*

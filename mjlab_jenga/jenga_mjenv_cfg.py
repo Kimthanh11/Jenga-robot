@@ -452,7 +452,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="jenga",
     save_interval=50,
     num_steps_per_env=32,
-    max_iterations=500,
+    max_iterations=50,
   )
 
 
