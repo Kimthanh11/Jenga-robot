@@ -56,6 +56,8 @@ parts = [f"""
 
         <body name="hook" pos="0.15 0.05 0.16">
             <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
+             <joint name="hook_slide_y" type="slide" axis="0 1 0" damping="2"/>
+              <joint name="hook_slide_z" type="slide" axis="0 0 1" damping="2"/>
 
             <geom type="box"
                 size="0.04 0.005 0.01"
@@ -171,7 +173,9 @@ parts.append("""
     </worldbody>
 
     <actuator>
-        <motor joint="hook_slide" ctrlrange="-1 1" gear="5"/>
+        <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
+        <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.05 0.05" />
+        <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.05 0.05" />
         <motor joint="hook_slide2" ctrlrange="-1 1" gear="5"/>
         <motor joint="hook_slide3" ctrlrange="-1 1" gear="5"/>
     </actuator>
