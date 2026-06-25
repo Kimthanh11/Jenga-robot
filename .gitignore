@@ -2,4 +2,5 @@
 __pycache__/
 *.pyc
 MUJOCO_LOG.TXT
+jenga.xml
 .vscode/

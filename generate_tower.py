@@ -6,7 +6,7 @@ LAYERS = 9
 BLOCKS_PER_LAYER = 3
 
 # EXACT JENGA BLOCK SIZE
-BLOCK_SIZE = (0.05, 0.152, 0.03)
+BLOCK_SIZE = (0.05, 0.15, 0.03)
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005  
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005  
@@ -189,12 +189,12 @@ def add_hook(parts, layer, position, name):
     offset = 0.15
 
     if layer % 2 == 0:
-        # odd layer: push along X
+        # even layer: push along X
         hook_x = offset
         hook_y = y
         angle = 0
     else:
-        # even layer: push along Y
+        # odd layer: push along Y
         hook_x = x
         hook_y = -offset
         angle = -90
@@ -220,9 +220,12 @@ def add_hook(parts, layer, position, name):
 """)
     
 hooks = [
-    (8, 3),
-    (7, 1),
-    (1, 2),
+    # (8, 3),
+    # (7, 1),
+    # (1, 2),
+    (2, 2),  # low    → hook_slide
+    (5, 1),  # middle → hook_slide2
+    (7, 3),  # high   → hook_slide3
 ]
 
 for i, (layer, position) in enumerate(hooks, start=1):
