@@ -68,10 +68,14 @@ _HOOK3_CFG = SceneEntityCfg("jenga", joint_names=("hook_slide3",))
 _HOOK_Y_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_y",))
 _HOOK_Z_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_z",))
 _TARGET_BLOCK_CFG = SceneEntityCfg("b6_1", body_names=("b6_1",))
-_REF_BLOCKS_CFG = SceneEntityCfg(
-    "jenga",
-    body_names=("b6_2", "b6_3"),
+_REF_BLOCK_1_CFG = SceneEntityCfg("b6_2", body_names=("b6_2",))
+_REF_BLOCK_2_CFG = SceneEntityCfg("b6_3", body_names=("b6_3",))
+_HOOK_YAW_CFG = SceneEntityCfg("hook", joint_names=("hook_yaw",))
+_HOOK_ALL_CFG = SceneEntityCfg(
+    "hook",
+    joint_names=("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw"),
 )
+
 
 
 #block entities
@@ -137,12 +141,13 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <worldbody>
     <body name="hook" pos="0 0 0">
-      <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
-      <joint name="hook_slide_y" type="slide" axis="0 1 0" damping="2"/>
-      <joint name="hook_slide_z" type="slide" axis="0 0 1" damping="2"/>
+      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.09 0.02" limited="true" damping="2"/>
+      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.01 0.01" limited="true" damping="2"/>
+      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.002 0.07" limited="true" damping="2"/>
+      <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 60" limited="true" damping="2"/>
 
       <geom type="box"
-            size="0.04 0.005 0.01"
+            size="0.04 0.005 0.006"
             pos="0 0 0"
             rgba="0.1 0.1 0.9 1"
             density="2000"
@@ -158,9 +163,10 @@ def _get_hook_spec() -> mujoco.MjSpec:
   </worldbody>
 
   <actuator>
-    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
-    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.05 0.05" kp="50"/>
-    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.05 0.05" kp="50"/>
+    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-0.09 0.02" gear="5"/>
+    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.01 0.01" kp="50"/>
+    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.002 0.07" kp="50"/>
+    <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
   </actuator>
 </mujoco>
 """
@@ -173,6 +179,7 @@ _HOOK_ARTICULATION = EntityArticulationInfoCfg(
         XmlActuatorCfg(target_names_expr=("hook_slide",)),
         XmlActuatorCfg(target_names_expr=("hook_slide_y",)),
         XmlActuatorCfg(target_names_expr=("hook_slide_z",)),
+        XmlActuatorCfg(target_names_expr=("hook_yaw",)),
     ),
 )
 
@@ -187,6 +194,7 @@ def _get_hook_cfg() -> EntityCfg:
                 "hook_slide": 0.0,
                 "hook_slide_y": 0.0,
                 "hook_slide_z": 0.0,
+                "hook_yaw": 0.0,
             },
             joint_vel={".*": 0.0},
         ),
@@ -241,6 +249,25 @@ def _build_entities() -> dict[str, EntityCfg]:
 
     return entities
 
+
+def make_all_block_cfgs():
+    all_block_cfgs = []
+    for block in _get_block_infos(): 
+        name = block["name"]
+        block_cfg = SceneEntityCfg(name, body_names=(name,))
+        all_block_cfgs.append(block_cfg)
+    return tuple(all_block_cfgs)
+
+_ALL_BLOCK_CFGS = make_all_block_cfgs() #get block configs (for position/velocity)
+
+def all_block_pos(env):
+    positions = []
+    for block_cfg in _ALL_BLOCK_CFGS:
+        pos = target_block_pos(env, block_cfg)
+        positions.append(pos)
+    return torch.cat(positions, dim=-1)
+
+
 # Observations
 
 
@@ -262,15 +289,38 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
 
 # get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
 # block_start_pos = target_block_pos()
-_START_BLOCK_POS = torch.tensor([0.0, 0.0505, 0.168])
+_START_TARGET_REL_POS = torch.tensor([0.0, 0.07575, 0.0])
 
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    block_current_pos = target_block_pos(env, asset_cfg)
-    movement = block_current_pos - _START_BLOCK_POS
+    ref_pos = get_block_ref_pos(env)
+    target_pos = target_block_pos(env, asset_cfg)
 
-    extraction_direction = torch.Tensor([-1, 0, 0])
-    progress = torch.sum(movement * extraction_direction, dim=-1)
+    current_rel = target_pos - ref_pos
+    movement_rel = current_rel - _START_TARGET_REL_POS.to(current_rel.device)
+
+    extraction_direction = torch.tensor(
+        [-1.0, 0.0, 0.0],
+        device=current_rel.device,
+    )
+    progress = torch.sum(movement_rel * extraction_direction, dim=-1)
+
     return progress
+
+
+
+def get_block_ref_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    ref1_block_pos = target_block_pos(env, _REF_BLOCK_1_CFG)
+    ref2_block_pos = target_block_pos(env, _REF_BLOCK_2_CFG)
+    ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
+    return ref_block_state_mean
+
+
+def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
+    progress = block_progress(env)
+    success = progress > 0.06
+    return success.float() # returns 0 or 1 per env
+
+
 
 
 
@@ -282,11 +332,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     actor_terms = {
         "pusher_pos": ObservationTermCfg(
             func=joint_pos_rel,
-            params={"asset_cfg": _HOOK1_CFG}
+            params={"asset_cfg": _HOOK_ALL_CFG}
         ),
         "pusher_vel": ObservationTermCfg(
             func=joint_vel_rel,
-            params={"asset_cfg": _HOOK1_CFG}
+            params={"asset_cfg": _HOOK_ALL_CFG}
         ),
         "block_pos": ObservationTermCfg(
             func=target_block_pos,
@@ -298,10 +348,21 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         )
     }
 
+    critic_terms = {
+        **actor_terms,
+        "block_all_pos": ObservationTermCfg(
+            func=all_block_pos,
+        ),
+        #"block_all_vel": ObservationTermCfg(
+         #   func=target_block_vel,
+          #  params={"asset_cfg": _ALL_BLOCK_CFGS},
+        #),
+    }
+
 
     observations = {
         "actor": ObservationGroupCfg(actor_terms, enable_corruption=True),
-        "critic": ObservationGroupCfg({**actor_terms}),
+        "critic": ObservationGroupCfg(critic_terms),
     }
 
 
@@ -310,18 +371,23 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "effort": JointEffortActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide",),
-            scale=1.0,
+            scale=0.5,
         ),
         "touch_y": RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide_y",),
-            scale=1.0,
+            scale=0.002,
         ),
         "touch_z": RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide_z",),
-            scale=1.0,
+            scale=0.009,
         ),
+        "yaw" : RelativeJointPositionActionCfg(
+            entity_name="hook",
+            actuator_names=("hook_yaw",),
+            scale=0.5,
+        )
     }
 
 
@@ -370,7 +436,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
             func=action_rate_l2,
             weight=-0.001,
-        )
+        ),
+        "successful_extract": RewardTermCfg(
+            func=success_block_extract,
+            weight=10.0,
+        ),
     }
 
     terminations = {
@@ -452,7 +522,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="jenga",
     save_interval=50,
     num_steps_per_env=32,
-    max_iterations=50,
+    max_iterations=350,
   )
 
 
