@@ -100,14 +100,16 @@ def _get_block_infos():
 
             if layer % 2 == 1:
                 x_positions = [-SIDE_SPACING, 0, SIDE_SPACING]
-                x = x_positions[block - 1]
-                y = 0.0
-                quat = _quat_from_z_rotation_deg(0.0)
+                x = x_positions[block - 1] + rng.uniform(-0.0005, 0.0005)
+                y = 0.0 + rng.uniform(-0.0005, 0.0005)
+                yaw_noise = rng.uniform(-1.0, 1.0)
+                quat = _quat_from_z_rotation_deg(0.0 + yaw_noise)
             else:
                 y_positions = [SIDE_SPACING, 0, -SIDE_SPACING]
-                x = 0.0
-                y = y_positions[block - 1]
-                quat = _quat_from_z_rotation_deg(90.0)
+                x = 0.0 + rng.uniform(-0.0005, 0.0005)
+                y = y_positions[block - 1] + rng.uniform(-0.0005, 0.0005)
+                yaw_noise = rng.uniform(-1.0, 1.0)
+                quat = _quat_from_z_rotation_deg(90.0 + yaw_noise)
 
             if layer % 2 == 1:
                 color = COLOR_A if block in (1, 3) else COLOR_B
@@ -163,7 +165,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   </worldbody>
 
   <actuator>
-    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-0.09 0.02" gear="5"/>
+    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
     <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.01 0.01" kp="50"/>
     <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.002 0.07" kp="50"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
@@ -287,9 +289,15 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
 
 
 
-# get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
-# block_start_pos = target_block_pos()
-_START_TARGET_REL_POS = torch.tensor([0.0, 0.07575, 0.0])
+def _initial_block_pos(block_name: str) -> torch.Tensor:
+    for block_info in _get_block_infos():
+        if block_info["name"] == block_name:
+            return torch.tensor(block_info["pos"])
+    raise ValueError(f"Unknown block name: {block_name}")
+
+
+_START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
+_START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
 
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     ref_pos = get_block_ref_pos(env)
@@ -308,7 +316,7 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
 
 
 
-def get_block_ref_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
     ref1_block_pos = target_block_pos(env, _REF_BLOCK_1_CFG)
     ref2_block_pos = target_block_pos(env, _REF_BLOCK_2_CFG)
     ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
@@ -317,8 +325,18 @@ def get_block_ref_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TAR
 
 def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
     progress = block_progress(env)
-    success = progress > 0.06
-    return success.float() # returns 0 or 1 per env
+    return progress > 0.06
+
+
+def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
+    return success_block_extract(env).float()
+
+
+def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
+    ref_pos = get_block_ref_pos(env)
+    movement = ref_pos - _START_REF_POS.to(ref_pos.device)
+    horizontal_movement = torch.norm(movement[:, :2], dim=-1)
+    return horizontal_movement > 0.03
 
 
 
@@ -342,10 +360,6 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=target_block_pos,
             params={"asset_cfg": _TARGET_BLOCK_CFG}
         ),
-        "block_vel": ObservationTermCfg(
-            func=target_block_vel,
-            params={"asset_cfg": _TARGET_BLOCK_CFG}
-        )
     }
 
     critic_terms = {
@@ -438,12 +452,14 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             weight=-0.001,
         ),
         "successful_extract": RewardTermCfg(
-            func=success_block_extract,
+            func=success_block_reward,
             weight=10.0,
         ),
     }
 
     terminations = {
+        "success": TerminationTermCfg(func=success_block_extract),
+        "tower_damage": TerminationTermCfg(func=tower_damage),
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
     }
 
@@ -452,7 +468,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
-            num_envs=1,
+            num_envs=8,
             env_spacing=4.0,
         ),
         observations=observations,
@@ -520,9 +536,9 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       max_grad_norm=1.0,
     ),
     experiment_name="jenga",
-    save_interval=50,
+    save_interval=500,
     num_steps_per_env=32,
-    max_iterations=350,
+    max_iterations=2000,
   )
 
 
