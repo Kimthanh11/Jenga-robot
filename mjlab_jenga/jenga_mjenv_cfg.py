@@ -336,7 +336,7 @@ def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
     ref_pos = get_block_ref_pos(env)
     movement = ref_pos - _START_REF_POS.to(ref_pos.device)
     horizontal_movement = torch.norm(movement[:, :2], dim=-1)
-    return horizontal_movement > 0.03
+    return horizontal_movement > 0.06
 
 
 
@@ -385,7 +385,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "effort": JointEffortActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide",),
-            scale=0.5,
+            scale=0.2,
         ),
         "touch_y": RelativeJointPositionActionCfg(
             entity_name="hook",
@@ -395,12 +395,12 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "touch_z": RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide_z",),
-            scale=0.009,
+            scale=0.002,
         ),
         "yaw" : RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_yaw",),
-            scale=0.5,
+            scale=0.05,
         )
     }
 
