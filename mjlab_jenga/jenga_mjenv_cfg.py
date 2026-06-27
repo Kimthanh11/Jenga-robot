@@ -19,6 +19,7 @@ from mjlab.envs.mdp import (
 )
 from mjlab.envs.mdp.actions import (
     JointEffortActionCfg,
+    JointVelocityActionCfg,
     RelativeJointPositionActionCfg,
 )
 from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
@@ -165,7 +166,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   </worldbody>
 
   <actuator>
-    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
+    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.03 0.03" kv="20"/>    
     <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.01 0.01" kp="50"/>
     <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.002 0.07" kp="50"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
@@ -382,10 +383,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
     #TODO Maybe swap effort (aka force) for velocity
     actions : dict[str, ActionTermCfg] = {
-        "effort": JointEffortActionCfg(
+        "x_velocity": JointVelocityActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide",),
-            scale=0.2,
+            scale=0.02,
+            clip={"hook_slide": (-0.03, 0.03)},
         ),
         "touch_y": RelativeJointPositionActionCfg(
             entity_name="hook",
