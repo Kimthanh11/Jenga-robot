@@ -623,6 +623,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             num_envs=8,
             env_spacing=4.0,
         ),
+        scale_rewards_by_dt=False,
         observations=observations,
         actions=actions,
         events=events,
