@@ -6,7 +6,7 @@ LAYERS = 9
 BLOCKS_PER_LAYER = 3
 
 # EXACT JENGA BLOCK SIZE
-BLOCK_SIZE = (0.05, 0.152, 0.03)
+BLOCK_SIZE = (0.05, 0.15, 0.03)
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005  
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005  
@@ -54,7 +54,61 @@ parts = [f"""
             {'friction="' + vec(FRICTION) + '"'}
         />
 
-        
+        <body name="hook" pos="0.15 0.05 0.16">
+            <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
+             <joint name="hook_slide_y" type="slide" axis="0 1 0" damping="2"/>
+              <joint name="hook_slide_z" type="slide" axis="0 0 1" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"
+                contype="0"
+                conaffinity="0"/>
+
+            <geom type="box"
+                size="0.006 0.004 0.004"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook2" pos="0.15 -0.05 0.107">
+            <joint name="hook_slide2" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"
+                contype="0"
+                conaffinity="0"/>
+
+            <geom type="box"
+                size="0.006 0.004 0.004"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook3" pos="0.15 0 0.107">
+            <joint name="hook_slide3" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"
+                contype="0"
+                conaffinity="0"/>
+
+            <geom type="box"
+                size="0.006 0.004 0.004"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
 """]
 
 # Generate the Jenga blocks layer-by-layer
@@ -135,12 +189,12 @@ def add_hook(parts, layer, position, name):
     offset = 0.15
 
     if layer % 2 == 0:
-        # odd layer: push along X
+        # even layer: push along X
         hook_x = offset
         hook_y = y
         angle = 0
     else:
-        # even layer: push along Y
+        # odd layer: push along Y
         hook_x = x
         hook_y = -offset
         angle = -90
@@ -166,9 +220,12 @@ def add_hook(parts, layer, position, name):
 """)
     
 hooks = [
-    (8, 3),
-    (7, 1),
-    (1, 2),
+    # (8, 3),
+    # (7, 1),
+    # (1, 2),
+    (2, 2),  # low    → hook_slide
+    (5, 1),  # middle → hook_slide2
+    (7, 3),  # high   → hook_slide3
 ]
 
 for i, (layer, position) in enumerate(hooks, start=1):
@@ -181,7 +238,9 @@ parts.append("""
     </worldbody>
 
     <actuator>
-        <motor joint="hook_slide" ctrlrange="-1 1" gear="5"/>
+        <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
+        <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.05 0.05" />
+        <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.05 0.05" />
         <motor joint="hook_slide2" ctrlrange="-1 1" gear="5"/>
         <motor joint="hook_slide3" ctrlrange="-1 1" gear="5"/>
     </actuator>
