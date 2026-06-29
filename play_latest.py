@@ -26,7 +26,7 @@ sys.argv = [
     "--checkpoint-file",
     str(last_ckpt),
     "--num-envs",
-    "4",
+    "1",
 ]
 
 main()
