@@ -1,0 +1,134 @@
+--- git commit ---
+c76ca423cb61ed05b57ca09ca1d32c02e5006de7
+
+
+--- git status ---
+On branch kimthanh
+Your branch is up to date with 'origin/kimthanh'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   mjlab_jenga/jenga_mjenv_cfg.py
+	modified:   play_latest.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	wandb/
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/mjlab_jenga/jenga_mjenv_cfg.py b/mjlab_jenga/jenga_mjenv_cfg.py
+index 194aac8..ada9a43 100644
+--- a/mjlab_jenga/jenga_mjenv_cfg.py
++++ b/mjlab_jenga/jenga_mjenv_cfg.py
+@@ -158,7 +158,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
+   </worldbody>
+ 
+   <actuator>
+-    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
++    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 5" gear="5"/>
+   </actuator>
+ </mujoco>
+ """
+@@ -293,9 +293,14 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
+     progress = torch.sum(movement * extraction_direction, dim=-1)
+     return progress
+ 
+-def target_success(env: ManagerBasedRlEnv) -> torch.Tensor:
+-    return block_progress(env) >= TARGET_X_GOAL
++def target_success(env):
++    progress = block_progress(env)
++    success = (progress >= TARGET_X_GOAL) & (~tower_collapsed(env))
+ 
++    print("progress", progress.detach().cpu().numpy(),
++          "success", success.detach().cpu().numpy())
++
++    return success
+ 
+ def target_success_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+     return target_success(env).float()
+@@ -331,6 +336,28 @@ def tower_com_penalty(env: ManagerBasedRlEnv) -> torch.Tensor:
+     xy_shift = torch.norm(com[:, :2], dim=-1)
+     return -xy_shift
+ 
++def hook_to_block_distance_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
++    hook_asset: Entity = env.scene["hook"]
++    # Get world position of the pusher body
++    hook_pos = hook_asset.data.body_link_pos_w[:, 0, :]
++    block_pos = target_block_pos(env)
++    
++    # Calculate absolute distance along the X-axis
++    distance = torch.abs(hook_pos[:, 0] - block_pos[:, 0])
++    
++    # Return negative distance so being closer gives a higher (less negative) reward
++    return -distance
++
++def block_velocity_reward(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
++    velocity = target_block_vel(env, asset_cfg) # Shape: (num_envs, 6) or (num_envs, 3)
++    
++    # Extract linear velocity along the X axis (index 0)
++    # Since extraction direction is [-1, 0, 0], we want negative velocity to be positive reward
++    x_vel = velocity[:, 0]
++    
++    # Only reward moving forward, don't reward pulling back
++    return torch.clamp(-x_vel, min=0.0)
++
+ # Environment conifg
+ 
+ 
+@@ -411,7 +438,19 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
+         "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
+             func=action_rate_l2,
+             weight=-0.001,
+-        )
++        ),
++        "hook_reach": RewardTermCfg(
++            func=hook_to_block_distance_reward,
++            weight=10.0, # Guides the hook to stick to the block
++        ),
++        "time_penalty": RewardTermCfg(
++            func=lambda env: -torch.ones(env.num_envs, device=env.device),
++            weight=2.0, # Small penalty per step to encourage speed
++        ),
++        "block_velocity": RewardTermCfg(
++            func=block_velocity_reward,
++            weight=50.0, # Push hard and fast!
++        ),
+     }
+ 
+     terminations = {
+@@ -431,7 +470,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
+         scene=SceneCfg(
+             terrain=TerrainEntityCfg(terrain_type="plane"),
+             entities=_build_entities(),
+-            num_envs=1,
++            num_envs=4,
+             env_spacing=4.0,
+         ),
+         observations=observations,
+@@ -451,7 +490,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
+             mujoco=MujocoCfg(timestep=0.002),
+         ),
+         decimation=5,
+-        episode_length_s=20.0,
++        episode_length_s=2.0,
+     )
+ 
+ 
+diff --git a/play_latest.py b/play_latest.py
+index 0cbe9ff..9c1be59 100644
+--- a/play_latest.py
++++ b/play_latest.py
+@@ -26,7 +26,7 @@ sys.argv = [
+     "--checkpoint-file",
+     str(last_ckpt),
+     "--num-envs",
+-    "4",
++    "1",
+ ]
+ 
+ main()
+\ No newline at end of file
