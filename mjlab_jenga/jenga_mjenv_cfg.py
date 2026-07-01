@@ -638,7 +638,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
         "debug_reward_signals": RewardTermCfg(
             func=debug_reward_signals,
-            weight=0.0,
+            weight=1e-12,
         ),
     }
 
