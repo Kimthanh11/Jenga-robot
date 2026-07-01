@@ -426,9 +426,12 @@ def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.norm(env.action_manager.action, dim=-1)
 
 
-def hook_x_position(env: ManagerBasedRlEnv) -> torch.Tensor:
-    asset: Entity = env.scene[_HOOK1_CFG.name]
-    return asset.data.joint_pos[:, _HOOK1_CFG.joint_ids].squeeze(-1)
+def hook_x_position(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _HOOK1_CFG,
+) -> torch.Tensor:
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids].squeeze(-1)
 
 
 class DeltaBlockProgressReward:
@@ -646,6 +649,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
         "hook_x_position_last": MetricsTermCfg(
             func=hook_x_position,
+            params={"asset_cfg": _HOOK1_CFG},
             reduce="last",
         ),
     }
