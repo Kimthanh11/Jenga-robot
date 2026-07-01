@@ -563,17 +563,17 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "touch_y": RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide_y",),
-            scale=0.002,
+            scale=0.000,
         ),
         "touch_z": RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide_z",),
-            scale=0.002,
+            scale=0.000,
         ),
         "yaw" : RelativeJointPositionActionCfg(
             entity_name="hook",
             actuator_names=("hook_yaw",),
-            scale=0.05,
+            scale=0.00,
         ),
     }
 
