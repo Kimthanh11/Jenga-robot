@@ -405,7 +405,7 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
     movement_rel = current_rel - _START_TARGET_REL_POS.to(current_rel.device)
 
     extraction_direction = torch.tensor(
-        [-1.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
         device=current_rel.device,
     )
     progress = torch.sum(movement_rel * extraction_direction, dim=-1)
@@ -676,7 +676,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
     terminations = {
         "success": TerminationTermCfg(func=success_block_extract),
-        "tower_damage": TerminationTermCfg(func=tower_damage),
+        #"tower_damage": TerminationTermCfg(func=tower_damage),
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
     }
 
