@@ -33,6 +33,7 @@ from mjlab.managers.observation_manager import (
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.rl import (
   RslRlModelCfg,
   RslRlOnPolicyRunnerCfg,
@@ -421,6 +422,15 @@ def tower_large_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
     return (shift > 0.02).float()
 
 
+def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return torch.norm(env.action_manager.action, dim=-1)
+
+
+def hook_x_position(env: ManagerBasedRlEnv) -> torch.Tensor:
+    asset: Entity = env.scene[_HOOK1_CFG.name]
+    return asset.data.joint_pos[:, _HOOK1_CFG.joint_ids].squeeze(-1)
+
+
 class DeltaBlockProgressReward:
     """Reward only new extraction progress since the previous environment step."""
 
@@ -584,7 +594,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     rewards = {
         "delta_block_progress": RewardTermCfg(
             func=DeltaBlockProgressReward(),
-            weight=0.1,
+            weight=1.0,
         ),
         # "torque_penalty": RewardTermCfg(
         #     func=joint_torques_l2,
@@ -597,7 +607,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         # ),
         "successful_extract": RewardTermCfg(
             func=success_block_reward,
-            weight=4.0,
+            weight=15.0,
         ),
         "tower_moderate_pertub" : RewardTermCfg(
             func=tower_moderate_perturbation,
@@ -606,6 +616,37 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "tower_large_pertub" : RewardTermCfg(
             func=tower_large_perturbation,
             weight=-100.0
+        ),
+    }
+
+    metrics = {
+        "block_progress_last": MetricsTermCfg(
+            func=block_progress,
+            reduce="last",
+        ),
+        "delta_block_progress_mean": MetricsTermCfg(
+            func=DeltaBlockProgressReward(),
+            reduce="mean",
+        ),
+        "success_last": MetricsTermCfg(
+            func=success_block_reward,
+            reduce="last",
+        ),
+        "tower_com_shift_last": MetricsTermCfg(
+            func=tower_com_shift,
+            reduce="last",
+        ),
+        "tower_large_perturb_mean": MetricsTermCfg(
+            func=tower_large_perturbation,
+            reduce="mean",
+        ),
+        "action_norm_mean": MetricsTermCfg(
+            func=action_norm,
+            reduce="mean",
+        ),
+        "hook_x_position_last": MetricsTermCfg(
+            func=hook_x_position,
+            reduce="last",
         ),
     }
 
@@ -628,6 +669,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         actions=actions,
         events=events,
         rewards=rewards,
+        metrics=metrics,
         terminations=terminations,
         viewer=ViewerConfig(
             origin_type=ViewerConfig.OriginType.WORLD,
