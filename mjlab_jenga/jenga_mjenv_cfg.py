@@ -613,7 +613,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     rewards = {
         "delta_block_progress": RewardTermCfg(
             func=DeltaBlockProgressReward(),
-            weight=3.0,
+            weight=40.0,
         ),
         # "torque_penalty": RewardTermCfg(
         #     func=joint_torques_l2,
@@ -626,7 +626,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         # ),
         "successful_extract": RewardTermCfg(
             func=success_block_reward,
-            weight=20.0,
+            weight=900.0,
         ),
         "tower_moderate_pertub" : RewardTermCfg(
             func=tower_moderate_perturbation,
