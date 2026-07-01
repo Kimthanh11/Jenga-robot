@@ -434,6 +434,22 @@ def hook_x_position(
     return asset.data.joint_pos[:, asset_cfg.joint_ids].squeeze(-1)
 
 
+def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
+    if env.common_step_counter % 500 == 0:
+        print(
+            "DEBUG_REWARD",
+            f"step={env.common_step_counter}",
+            f"progress_mean={block_progress(env).mean().item():.5f}",
+            f"success_mean={success_block_reward(env).mean().item():.5f}",
+            f"tower_shift_mean={tower_com_shift(env).mean().item():.5f}",
+            f"large_mean={tower_large_perturbation(env).mean().item():.5f}",
+            f"action_norm_mean={action_norm(env).mean().item():.5f}",
+            f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
+            flush=True,
+        )
+    return torch.zeros(env.num_envs, device=env.device)
+
+
 class DeltaBlockProgressReward:
     """Reward only new extraction progress since the previous environment step."""
 
@@ -619,6 +635,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "tower_large_pertub" : RewardTermCfg(
             func=tower_large_perturbation,
             weight=-100.0
+        ),
+        "debug_reward_signals": RewardTermCfg(
+            func=debug_reward_signals,
+            weight=0.0,
         ),
     }
 
