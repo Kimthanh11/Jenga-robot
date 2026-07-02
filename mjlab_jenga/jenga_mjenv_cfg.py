@@ -272,6 +272,12 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
     progress = torch.sum(movement * extraction_direction, dim=-1)
     return progress
 
+_EXTRACT_SUCCESS_DIST = 0.75 * BLOCK_SIZE[1]
+
+def extraction_success(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    progress = block_progress(env, asset_cfg)
+    return (progress > _EXTRACT_SUCCESS_DIST).float()
+
 
 
 # Environment conifg
@@ -370,7 +376,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
             func=action_rate_l2,
             weight=-0.001,
-        )
+        ),
+        "extraction_success": RewardTermCfg( #terminal-style bonus once the block is ~3/4 out
+            func=extraction_success,
+            weight=2.0,
+        ),
     }
 
     terminations = {
@@ -423,7 +433,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     actor=RslRlModelCfg(
       hidden_dims=(64, 64),
       activation="elu",
-      obs_normalization=False,
+      obs_normalization=True,
       distribution_cfg={
         "class_name": "GaussianDistribution",
         "init_std": 1.0,
@@ -433,7 +443,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     critic=RslRlModelCfg(
       hidden_dims=(64, 64),
       activation="elu",
-      obs_normalization=False,
+      obs_normalization=True,
     ),
     algorithm=RslRlPpoAlgorithmCfg(
       value_loss_coef=1.0,
