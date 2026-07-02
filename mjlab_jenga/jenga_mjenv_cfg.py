@@ -147,7 +147,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <worldbody>
     <body name="hook" pos="0 0 0">
-      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.09 0.02" limited="true" damping="2"/>
+      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.18 0.02" limited="true" damping="2"/>
       <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.01 0.01" limited="true" damping="2"/>
       <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.002 0.07" limited="true" damping="2"/>
       <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 60" limited="true" damping="2"/>
