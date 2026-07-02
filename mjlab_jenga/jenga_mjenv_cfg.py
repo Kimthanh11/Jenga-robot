@@ -275,7 +275,7 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
 
 # get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
 # block_start_pos = target_block_pos()
-TARGET_X_GOAL = 0.170
+TARGET_X_GOAL = 0.152
 MAX_COM_SHIFT = 0.08
 MIN_COM_HEIGHT = 0.12
 
@@ -283,7 +283,6 @@ _START_BLOCK_POS = torch.tensor(
     get_block_info(TARGET_BLOCK)["pos"],
     dtype=torch.float,
 )
-# _START_BLOCK_POS = torch.tensor([0.0, 0.0505, 0.168])
 
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     block_current_pos = target_block_pos(env, asset_cfg)
@@ -293,13 +292,32 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
     progress = torch.sum(movement * extraction_direction, dim=-1)
     return progress
 
+# def target_success(env):
+#     progress = block_progress(env)
+#     success = (progress >= TARGET_X_GOAL) & (~tower_collapsed(env))
+
+#     print("progress", progress.detach().cpu().numpy(),
+#           "success", success.detach().cpu().numpy())
+
+#     return success
+
+OUTSIDE_X_THRESHOLD = 0.20
+OUTSIDE_Z_DROP = 0.025
+
+def target_block_outside(env: ManagerBasedRlEnv) -> torch.Tensor:
+    block_pos = target_block_pos(env)
+    start_pos = _START_BLOCK_POS.to(block_pos.device)
+
+    x_progress = start_pos[0] - block_pos[:, 0]
+    z_drop = start_pos[2] - block_pos[:, 2]
+
+    x_outside = x_progress > OUTSIDE_X_THRESHOLD
+    z_outside = z_drop > OUTSIDE_Z_DROP
+
+    return x_outside | z_outside
+
 def target_success(env):
-    progress = block_progress(env)
-    success = (progress >= TARGET_X_GOAL) & (~tower_collapsed(env))
-
-    print("progress", progress.detach().cpu().numpy(),
-          "success", success.detach().cpu().numpy())
-
+    success = target_block_outside(env) & (~tower_collapsed(env))
     return success
 
 def target_success_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -434,11 +452,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=action_rate_l2,
             weight=-0.001,
         ),
-        "torque_penalty": RewardTermCfg(
-            func=joint_torques_l2,
-            weight=-0.01,
-            params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
-        ),
+        # "torque_penalty": RewardTermCfg(
+        #     func=joint_torques_l2,
+        #     weight=-0.01,
+        #     params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
+        # ),
         # "hook_reach": RewardTermCfg(
         #     func=hook_to_block_distance_reward,
         #     weight=10.0, # Guides the hook to stick to the block
@@ -538,7 +556,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       max_grad_norm=1.0,
     ),
     experiment_name="jenga",
-    save_interval=20,
+    save_interval=10,
     num_steps_per_env=32,
     max_iterations=500,
   )
