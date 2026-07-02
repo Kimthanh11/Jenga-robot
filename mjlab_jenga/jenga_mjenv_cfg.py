@@ -396,6 +396,8 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
+PERTURBATION_CURRICULUM_START = 0.1
+PERTURBATION_CURRICULUM_STEPS = 20_000
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
@@ -429,6 +431,22 @@ def tower_large_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
     return (shift > 0.02).float()
 
 
+def perturbation_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    progress = min(env.common_step_counter / PERTURBATION_CURRICULUM_STEPS, 1.0)
+    scale = PERTURBATION_CURRICULUM_START + (
+        1.0 - PERTURBATION_CURRICULUM_START
+    ) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
+
+
+def tower_large_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_large_perturbation(env) * perturbation_curriculum_scale(env)
+
+
 def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.norm(env.action_manager.action, dim=-1)
 
@@ -457,6 +475,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"success_mean={success_block_reward(env).mean().item():.5f}",
             f"tower_shift_mean={tower_com_shift(env).mean().item():.5f}",
             f"large_mean={tower_large_perturbation(env).mean().item():.5f}",
+            f"perturb_scale={perturbation_curriculum_scale(env).item():.3f}",
             f"action_norm_mean={action_norm(env).mean().item():.5f}",
             f"act_x={action[:, 0].mean().item():.5f}",
             f"act_y={action[:, 1].mean().item():.5f}",
@@ -516,7 +535,7 @@ def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
     ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
     return ref_block_state_mean
 
-SUCCESS_DONE_DISTANCE = BLOCK_SIZE[1] * 0.9
+SUCCESS_DONE_DISTANCE = BLOCK_SIZE[1] * 0.8
 def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
     progress = block_progress(env)
     return progress > SUCCESS_DONE_DISTANCE
@@ -651,11 +670,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             weight=900.0,
         ),
         "tower_moderate_pertub" : RewardTermCfg(
-            func=tower_moderate_perturbation,
+            func=tower_moderate_perturbation_curriculum,
             weight=-0.2
         ),
         "tower_large_pertub" : RewardTermCfg(
-            func=tower_large_perturbation,
+            func=tower_large_perturbation_curriculum,
             weight=-100.0
         ),
         "debug_reward_signals": RewardTermCfg(
