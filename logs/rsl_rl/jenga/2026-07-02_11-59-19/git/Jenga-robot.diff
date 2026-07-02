@@ -1,0 +1,80 @@
+--- git commit ---
+51674ca7a45f57b34fdb283b03d3e1c5c683739c
+
+
+--- git status ---
+On branch kimthanh
+Your branch is up to date with 'origin/kimthanh'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   mjlab_jenga/jenga_mjenv_cfg.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/jenga/2026-07-02_11-40-51/
+	logs/rsl_rl/jenga/2026-07-02_11-59-19/
+	run_trained_simulation.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/mjlab_jenga/jenga_mjenv_cfg.py b/mjlab_jenga/jenga_mjenv_cfg.py
+index f349b98..a75b2c3 100644
+--- a/mjlab_jenga/jenga_mjenv_cfg.py
++++ b/mjlab_jenga/jenga_mjenv_cfg.py
+@@ -275,7 +275,7 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
+ 
+ # get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
+ # block_start_pos = target_block_pos()
+-TARGET_X_GOAL = 0.152
++TARGET_X_GOAL = 0.170
+ MAX_COM_SHIFT = 0.08
+ MIN_COM_HEIGHT = 0.12
+ 
+@@ -430,27 +430,27 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
+             func=lambda env: -tower_collapsed(env).float(),
+             weight=10.0,
+         ),
+-        "torque_penalty": RewardTermCfg(
+-            func=joint_torques_l2,
+-            weight=-0.01,
+-            params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
+-        ),
+         "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
+             func=action_rate_l2,
+             weight=-0.001,
+         ),
+-        "hook_reach": RewardTermCfg(
+-            func=hook_to_block_distance_reward,
+-            weight=10.0, # Guides the hook to stick to the block
+-        ),
+-        "time_penalty": RewardTermCfg(
+-            func=lambda env: -torch.ones(env.num_envs, device=env.device),
+-            weight=2.0, # Small penalty per step to encourage speed
+-        ),
+-        "block_velocity": RewardTermCfg(
+-            func=block_velocity_reward,
+-            weight=50.0, # Push hard and fast!
++        "torque_penalty": RewardTermCfg(
++            func=joint_torques_l2,
++            weight=-0.01,
++            params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
+         ),
++        # "hook_reach": RewardTermCfg(
++        #     func=hook_to_block_distance_reward,
++        #     weight=10.0, # Guides the hook to stick to the block
++        # ),
++        # "time_penalty": RewardTermCfg(
++        #     func=lambda env: -torch.ones(env.num_envs, device=env.device),
++        #     weight=2.0, # Small penalty per step to encourage speed
++        # ),
++        # "block_velocity": RewardTermCfg(
++        #     func=block_velocity_reward,
++        #     weight=50.0, # Push hard and fast!
++        # ),
+     }
+ 
+     terminations = {

@@ -275,7 +275,7 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
 
 # get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
 # block_start_pos = target_block_pos()
-TARGET_X_GOAL = 0.152
+TARGET_X_GOAL = 0.170
 MAX_COM_SHIFT = 0.08
 MIN_COM_HEIGHT = 0.12
 
@@ -430,27 +430,27 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=lambda env: -tower_collapsed(env).float(),
             weight=10.0,
         ),
+        "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
+            func=action_rate_l2,
+            weight=-0.001,
+        ),
         "torque_penalty": RewardTermCfg(
             func=joint_torques_l2,
             weight=-0.01,
             params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
         ),
-        "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
-            func=action_rate_l2,
-            weight=-0.001,
-        ),
-        "hook_reach": RewardTermCfg(
-            func=hook_to_block_distance_reward,
-            weight=10.0, # Guides the hook to stick to the block
-        ),
-        "time_penalty": RewardTermCfg(
-            func=lambda env: -torch.ones(env.num_envs, device=env.device),
-            weight=2.0, # Small penalty per step to encourage speed
-        ),
-        "block_velocity": RewardTermCfg(
-            func=block_velocity_reward,
-            weight=50.0, # Push hard and fast!
-        ),
+        # "hook_reach": RewardTermCfg(
+        #     func=hook_to_block_distance_reward,
+        #     weight=10.0, # Guides the hook to stick to the block
+        # ),
+        # "time_penalty": RewardTermCfg(
+        #     func=lambda env: -torch.ones(env.num_envs, device=env.device),
+        #     weight=2.0, # Small penalty per step to encourage speed
+        # ),
+        # "block_velocity": RewardTermCfg(
+        #     func=block_velocity_reward,
+        #     weight=50.0, # Push hard and fast!
+        # ),
     }
 
     terminations = {

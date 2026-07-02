@@ -1,0 +1,36 @@
+--- git commit ---
+51674ca7a45f57b34fdb283b03d3e1c5c683739c
+
+
+--- git status ---
+On branch kimthanh
+Your branch is up to date with 'origin/kimthanh'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   mjlab_jenga/jenga_mjenv_cfg.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	logs/rsl_rl/jenga/2026-07-02_11-27-11/
+	logs/rsl_rl/jenga/2026-07-02_11-40-51/
+	run_trained_simulation.py
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/mjlab_jenga/jenga_mjenv_cfg.py b/mjlab_jenga/jenga_mjenv_cfg.py
+index f349b98..6f79194 100644
+--- a/mjlab_jenga/jenga_mjenv_cfg.py
++++ b/mjlab_jenga/jenga_mjenv_cfg.py
+@@ -275,7 +275,7 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
+ 
+ # get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
+ # block_start_pos = target_block_pos()
+-TARGET_X_GOAL = 0.152
++TARGET_X_GOAL = 0.170
+ MAX_COM_SHIFT = 0.08
+ MIN_COM_HEIGHT = 0.12
+ 
