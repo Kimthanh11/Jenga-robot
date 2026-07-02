@@ -535,7 +535,7 @@ def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
     ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
     return ref_block_state_mean
 
-SUCCESS_DONE_DISTANCE = BLOCK_SIZE[1] * 0.8
+SUCCESS_DONE_DISTANCE = BLOCK_SIZE[1] * 0.75
 def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
     progress = block_progress(env)
     return progress > SUCCESS_DONE_DISTANCE
