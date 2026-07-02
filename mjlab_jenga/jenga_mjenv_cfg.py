@@ -170,7 +170,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   </worldbody>
 
   <actuator>
-    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.05 0.05" kv="100"/>    
+    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>    
     <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.01 0.01" kp="50"/>
     <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.002 0.07" kp="50"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
@@ -558,7 +558,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             entity_name="hook",
             actuator_names=("hook_slide",),
             scale=0.03,
-            clip={"hook_slide": (-0.03, 0.03)},
+            clip={"hook_slide": (-0.6, 0.6},
         ),
         "touch_y": RelativeJointPositionActionCfg(
             entity_name="hook",
