@@ -413,7 +413,7 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
 
     extraction_direction = torch.tensor(
         [1.0, 0.0, 0.0],
-        device=current_rel.device,
+        device=movement_rel.device,
     )
     progress = torch.sum(movement_rel * extraction_direction, dim=-1)
 
