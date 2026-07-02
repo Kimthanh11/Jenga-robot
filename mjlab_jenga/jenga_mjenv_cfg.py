@@ -397,7 +397,7 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
 PERTURBATION_CURRICULUM_START = 0.1
-PERTURBATION_CURRICULUM_STEPS = 20_000
+PERTURBATION_CURRICULUM_STEPS = 100_000
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
