@@ -397,12 +397,19 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
 # Rewards
-def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+def target_block_relative_movement(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
     ref_pos = get_block_ref_pos(env)
     target_pos = target_block_pos(env, asset_cfg)
 
     current_rel = target_pos - ref_pos
-    movement_rel = current_rel - _START_TARGET_REL_POS.to(current_rel.device)
+    return current_rel - _START_TARGET_REL_POS.to(current_rel.device)
+
+
+def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    movement_rel = target_block_relative_movement(env, asset_cfg)
 
     extraction_direction = torch.tensor(
         [1.0, 0.0, 0.0],
@@ -436,15 +443,30 @@ def hook_x_position(
 
 def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
     if env.common_step_counter % 500 == 0:
+        action = env.action_manager.action
+        hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
+        hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+        movement_rel = target_block_relative_movement(env)
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
             f"progress_mean={block_progress(env).mean().item():.5f}",
+            f"move_x={movement_rel[:, 0].mean().item():.5f}",
+            f"move_y={movement_rel[:, 1].mean().item():.5f}",
+            f"move_z={movement_rel[:, 2].mean().item():.5f}",
             f"success_mean={success_block_reward(env).mean().item():.5f}",
             f"tower_shift_mean={tower_com_shift(env).mean().item():.5f}",
             f"large_mean={tower_large_perturbation(env).mean().item():.5f}",
             f"action_norm_mean={action_norm(env).mean().item():.5f}",
+            f"act_x={action[:, 0].mean().item():.5f}",
+            f"act_y={action[:, 1].mean().item():.5f}",
+            f"act_z={action[:, 2].mean().item():.5f}",
+            f"act_yaw={action[:, 3].mean().item():.5f}",
             f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
+            f"joint_x={hook_joint_pos[:, 0].mean().item():.5f}",
+            f"joint_y={hook_joint_pos[:, 1].mean().item():.5f}",
+            f"joint_z={hook_joint_pos[:, 2].mean().item():.5f}",
+            f"joint_yaw={hook_joint_pos[:, 3].mean().item():.5f}",
             flush=True,
         )
     return torch.zeros(env.num_envs, device=env.device)
