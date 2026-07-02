@@ -398,6 +398,9 @@ _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
 PERTURBATION_CURRICULUM_START = 0.1
 PERTURBATION_CURRICULUM_STEPS = 100_000
+SUCCESS_CURRICULUM_START = 0.35
+SUCCESS_CURRICULUM_END = 0.75
+SUCCESS_CURRICULUM_STEPS = 100_000
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
@@ -439,6 +442,18 @@ def perturbation_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.tensor(scale, device=env.device)
 
 
+def success_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    progress = min(env.common_step_counter / SUCCESS_CURRICULUM_STEPS, 1.0)
+    scale = SUCCESS_CURRICULUM_START + (
+        SUCCESS_CURRICULUM_END - SUCCESS_CURRICULUM_START
+    ) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def success_done_distance(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return BLOCK_SIZE[1] * success_curriculum_scale(env)
+
+
 def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
     return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
 
@@ -469,6 +484,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
             f"progress_mean={block_progress(env).mean().item():.5f}",
+            f"success_dist={success_done_distance(env).item():.5f}",
             f"move_x={movement_rel[:, 0].mean().item():.5f}",
             f"move_y={movement_rel[:, 1].mean().item():.5f}",
             f"move_z={movement_rel[:, 2].mean().item():.5f}",
@@ -535,10 +551,9 @@ def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
     ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
     return ref_block_state_mean
 
-SUCCESS_DONE_DISTANCE = BLOCK_SIZE[1] * 0.75
 def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
     progress = block_progress(env)
-    return progress > SUCCESS_DONE_DISTANCE
+    return progress > success_done_distance(env)
 
 
 def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
