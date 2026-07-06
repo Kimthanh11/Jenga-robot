@@ -272,6 +272,16 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
     progress = torch.sum(movement * extraction_direction, dim=-1)
     return progress
 
+# Fazeli's dx_t (b1 term): per-step positive displacement of the target block along
+# the extraction axis. Summed over the episode this telescopes to total displacement,
+# so (unlike block_progress, which integrates absolute position) merely *holding* a
+# displaced block yields no extra reward.
+def block_dx(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    lin_vel = target_block_vel(env, asset_cfg)[..., :3]  # world-frame linear velocity
+    extraction_direction = torch.tensor([-1.0, 0.0, 0.0], device=lin_vel.device)
+    speed_along_axis = torch.sum(lin_vel * extraction_direction, dim=-1)
+    return speed_along_axis * env.step_dt
+
 _EXTRACT_SUCCESS_DIST = 0.75 * BLOCK_SIZE[1]
 
 def extraction_success(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
@@ -364,22 +374,26 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
 
     rewards = {
-        "block_progress": RewardTermCfg(
-            func=block_progress,
-            weight=1.0,
+        # Fazeli b1*dx_t: accumulating positive displacement along the block's major axis.
+        "block_dx": RewardTermCfg(
+            func=block_dx,
+            weight=0.1,   # b1
         ),
+        # Fazeli's reward has NO control-effort term. Kept (weight 0) so it can be
+        # re-enabled later without re-adding the plumbing.
         "torque_penalty": RewardTermCfg(
             func=joint_torques_l2,
-            weight=-0.01,
+            weight=0.0,
             params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
         ),
-        "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
+        "action_rate": RewardTermCfg( #kept (weight 0) for later phases, off for Phase 1
             func=action_rate_l2,
-            weight=-0.001,
+            weight=0.0,
         ),
-        "extraction_success": RewardTermCfg( #terminal-style bonus once the block is ~3/4 out
+        # Fazeli b4*D3: terminal-style bonus once the block is ~3/4 extracted.
+        "extraction_success": RewardTermCfg(
             func=extraction_success,
-            weight=2.0,
+            weight=4.0,   # b4
         ),
     }
 
