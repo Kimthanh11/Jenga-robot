@@ -2,6 +2,8 @@ import mujoco
 import mujoco.viewer
 import time
 
+from tower_state import TowerState
+
 
 model = mujoco.MjModel.from_xml_path("jenga.xml")
 data = mujoco.MjData(model)
@@ -12,6 +14,7 @@ SETTLE_TIME = 1.0
 PUSH_DURATION = 40
 PAUSE_DURATION = 1.0
 PUSH_CTRL = -1.0
+PRINT_EVERY = 0.5  # seconds between state printouts
 
 schedule = [
     (0, 3.0, 6.0),
@@ -19,43 +22,9 @@ schedule = [
     (2, 10.0, 87.0),
 ]
 
-# get body name+++++++++++++++++++++++
-def body_name(body_id):
-    return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
-
-
-def is_jenga_block(body_name):
-    return body_name is not None and body_name.startswith("b")
-
-
-def pusher_body_id_from_actuator(actuator_id):
-    joint_id = model.actuator_trnid[actuator_id][0]
-    return model.jnt_bodyid[joint_id]
-
-
-def touched_blocks_by_actuator(actuator_id):
-    pusher_body_id = pusher_body_id_from_actuator(actuator_id)
-    touched_blocks = set()
-
-    for i in range(data.ncon):
-        contact = data.contact[i]
-
-        body1_id = model.geom_bodyid[contact.geom1]
-        body2_id = model.geom_bodyid[contact.geom2]
-
-        body1_name = body_name(body1_id)
-        body2_name = body_name(body2_id)
-
-        if body1_id == pusher_body_id and is_jenga_block(body2_name):
-            touched_blocks.add(body2_name)
-
-        if body2_id == pusher_body_id and is_jenga_block(body1_name):
-            touched_blocks.add(body1_name)
-
-    return sorted(touched_blocks)
-# end get body name++++++++++
-
-printed_contacts = set()
+state = TowerState(model, data)
+recorded = False
+next_print = 0.0
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
@@ -71,14 +40,15 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
         mujoco.mj_step(model, data)
 
-        if active_actuator_id is not None:
-            blocks = touched_blocks_by_actuator(active_actuator_id)
+        # Snapshot the settled tower once, just before pushing begins.
+        if not recorded and data.time >= SETTLE_TIME:
+            state.record_initial()
+            recorded = True
+            print(f"[{data.time:5.1f}s] tower settled, reference recorded")
 
-            for block in blocks:
-                key = (active_actuator_id, block)
-
-                if key not in printed_contacts:
-                    print(f"{data.time:.2f}s actuator {active_actuator_id} touches {block}")
-                    printed_contacts.add(key)
+        # Print live state readings at a fixed cadence.
+        if recorded and data.time >= next_print:
+            print(f"[{data.time:5.1f}s] {state.summary()}")
+            next_print = data.time + PRINT_EVERY
 
         viewer.sync()

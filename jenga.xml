@@ -313,7 +313,7 @@
                 type="box"
                 size="0.025 0.076 0.015"
                 rgba="0.68 0.85 0.9 1"
-                friction="0.200 0.035 0.001"
+                friction="0.250 0.035 0.0015"
             />
         </body>
 
@@ -383,6 +383,60 @@
                 rgba="0.68 0.85 0.9 1"
                 friction="0.216 0.026 0.001"
             />
+        </body>
+
+        <body name="hook_slide"
+              pos="0.15 -0.0505 0.229"
+              euler="0 0 0">
+            <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook_slide2"
+              pos="-0.0505 -0.15 0.1985"
+              euler="0 0 -90">
+            <joint name="hook_slide2" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
+        </body>
+
+        <body name="hook_slide3"
+              pos="0 -0.15 0.0155"
+              euler="0 0 -90">
+            <joint name="hook_slide3" type="slide" axis="1 0 0" damping="2"/>
+
+            <geom type="box"
+                size="0.04 0.005 0.01"
+                pos="0 0 0"
+                rgba="0.1 0.1 0.9 1"
+                density="2000"/>
+
+            <geom type="box"
+                size="0.01 0.01 0.01"
+                pos="-0.05 0 0"
+                rgba="1 0 0 1"
+                density="2000"/>
         </body>
 
     </worldbody>
