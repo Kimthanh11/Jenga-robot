@@ -266,9 +266,10 @@ _START_BLOCK_POS = torch.tensor([0.0, 0.0505, 0.168])
 
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     block_current_pos = target_block_pos(env, asset_cfg)
-    movement = block_current_pos - _START_BLOCK_POS
+    device = block_current_pos.device
+    movement = block_current_pos - _START_BLOCK_POS.to(device)
 
-    extraction_direction = torch.Tensor([-1, 0, 0])
+    extraction_direction = torch.tensor([-1.0, 0.0, 0.0], device=device)
     progress = torch.sum(movement * extraction_direction, dim=-1)
     return progress
 
