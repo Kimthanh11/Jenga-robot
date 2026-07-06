@@ -308,18 +308,31 @@ _PERTURB_SCALE = 0.4 / 0.02          # metres -> p  (= 20.0 per metre)
 _PERTURB_MODERATE_LO = 0.08          # D1 band lower bound
 _PERTURB_LARGE_HI = 0.4              # D2 threshold (near-collapse)
 
-def tower_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """Fazeli's p: horizontal shift of the tower CoM (all blocks except the target)
-    from its rest pose, scaled so 20 mm -> 0.4. Using only x,y makes it robust to the
-    small vertical settling under gravity; a leaning/toppling tower -> large p."""
+def _tower_com(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Center of mass (x, y, z) of the tower EXCLUDING the target block. (num_envs, 3).
+    Blocks are equal-mass, so the mean of body positions is the CoM."""
     positions = torch.stack(
         [env.scene[name].data.body_link_pos_w[:, 0, :] for name in _NON_TARGET_BLOCK_NAMES],
         dim=1,
     )  # (num_envs, N_blocks, 3)
-    com = positions.mean(dim=1)                       # (num_envs, 3)
+    return positions.mean(dim=1)  # (num_envs, 3)
+
+def tower_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Fazeli's p: horizontal shift of the tower CoM (all blocks except the target)
+    from its rest pose, scaled so 20 mm -> 0.4. Using only x,y makes it robust to the
+    small vertical settling under gravity; a leaning/toppling tower -> large p."""
+    com = _tower_com(env)
     ref = _TOWER_REF_COM.to(com.device)
     horizontal_shift = torch.norm(com[:, :2] - ref[:2], dim=-1)
     return horizontal_shift * _PERTURB_SCALE
+
+# Phase 3: expose the tower's overall state to the policy as an OBSERVATION feature,
+# so it can pre-empt leaning instead of only being penalized after the fact.
+def tower_com_deviation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Tower CoM (excluding target) deviation from its rest pose, (num_envs, 3).
+    Centered at ~0 at reset so it's a clean, obs-normalizable signal of tower lean/drop."""
+    com = _tower_com(env)
+    return com - _TOWER_REF_COM.to(com.device)
 
 def perturb_moderate(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Fazeli D1: linear in p over (0.08, 0.4), zero elsewhere."""
@@ -360,7 +373,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "block_vel": ObservationTermCfg(
             func=target_block_vel,
             params={"asset_cfg": _TARGET_BLOCK_CFG}
-        )
+        ),
+        # Phase 3: tower CoM deviation (excluding the moving block) as a feature.
+        "tower_com_dev": ObservationTermCfg(
+            func=tower_com_deviation,
+        ),
     }
 
 
