@@ -1,7 +1,10 @@
 .venv/
-logs/
 __pycache__/
 *.pyc
 MUJOCO_LOG.TXT
-jenga.xml
 .vscode/
+
+logs/
+wandb/
+*.pt
+*.tfevents*
