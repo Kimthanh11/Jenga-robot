@@ -31,6 +31,8 @@ from mjlab.managers.observation_manager import (
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
+from mjlab.managers.curriculum_manager import CurriculumTermCfg
+from mjlab.envs.mdp.curriculums import reward_curriculum, termination_curriculum
 from mjlab.rl import (
   RslRlModelCfg,
   RslRlOnPolicyRunnerCfg,
@@ -290,6 +292,52 @@ def extraction_success(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TA
     return (progress > _EXTRACT_SUCCESS_DIST).float()
 
 
+# --- Phase 2: tower-perturbation penalty + topple termination (Fazeli D1/D2) ---
+
+_TARGET_NAME = _TARGET_BLOCK_CFG.name  # "b6_1"
+_NON_TARGET_BLOCK_NAMES = tuple(
+    b["name"] for b in _get_block_infos() if b["name"] != _TARGET_NAME
+)
+# Reference CoM (x, y, z) of the tower EXCLUDING the target block, from rest poses.
+_TOWER_REF_COM = torch.tensor(
+    [b["pos"] for b in _get_block_infos() if b["name"] != _TARGET_NAME]
+).mean(dim=0)
+
+# Fazeli maps perturbation p=0.4 to a ~20 mm whole-tower displacement.
+_PERTURB_SCALE = 0.4 / 0.02          # metres -> p  (= 20.0 per metre)
+_PERTURB_MODERATE_LO = 0.08          # D1 band lower bound
+_PERTURB_LARGE_HI = 0.4              # D2 threshold (near-collapse)
+
+def tower_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Fazeli's p: horizontal shift of the tower CoM (all blocks except the target)
+    from its rest pose, scaled so 20 mm -> 0.4. Using only x,y makes it robust to the
+    small vertical settling under gravity; a leaning/toppling tower -> large p."""
+    positions = torch.stack(
+        [env.scene[name].data.body_link_pos_w[:, 0, :] for name in _NON_TARGET_BLOCK_NAMES],
+        dim=1,
+    )  # (num_envs, N_blocks, 3)
+    com = positions.mean(dim=1)                       # (num_envs, 3)
+    ref = _TOWER_REF_COM.to(com.device)
+    horizontal_shift = torch.norm(com[:, :2] - ref[:2], dim=-1)
+    return horizontal_shift * _PERTURB_SCALE
+
+def perturb_moderate(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Fazeli D1: linear in p over (0.08, 0.4), zero elsewhere."""
+    p = tower_perturbation(env)
+    in_band = (p > _PERTURB_MODERATE_LO) & (p <= _PERTURB_LARGE_HI)
+    return torch.where(in_band, p, torch.zeros_like(p))
+
+def perturb_large(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Fazeli D2: fixed 100 once p exceeds 0.4 (near-collapse)."""
+    p = tower_perturbation(env)
+    return (p > _PERTURB_LARGE_HI).float() * 100.0
+
+def tower_toppled(env: ManagerBasedRlEnv, threshold: float = 1e9) -> torch.Tensor:
+    """True termination when perturbation exceeds `threshold` (Fazeli ends the run on
+    topple). Threshold starts effectively infinite and is ramped to 0.4 by the curriculum."""
+    return tower_perturbation(env) > threshold
+
+
 
 # Environment conifg
 
@@ -396,10 +444,57 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=extraction_success,
             weight=4.0,   # b4
         ),
+        # Fazeli -b2*D1: moderate tower-perturbation penalty. Ramped 0 -> -0.2 by the
+        # curriculum (learn to push first, then care about stability).
+        "perturb_moderate": RewardTermCfg(
+            func=perturb_moderate,
+            weight=0.0,
+        ),
+        # Fazeli -b3*D2: large perturbation / near-collapse penalty. Ramped 0 -> -100.
+        "perturb_large": RewardTermCfg(
+            func=perturb_large,
+            weight=0.0,
+        ),
     }
 
     terminations = {
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
+        # Fazeli: a run ends on tower topple. True termination (not truncation).
+        # threshold starts ~inf (never fires) and is ramped to 0.4 by the curriculum.
+        "topple": TerminationTermCfg(
+            func=tower_toppled,
+            params={"threshold": 1e9},
+            time_out=False,
+        ),
+    }
+
+    # Phase 2 warmup schedule (common_step_counter = iterations * num_steps_per_env(32)):
+    # push-only until ~iter 300, full Fazeli stability gains by ~iter 500.
+    _WARMUP = 300 * 32   #  9600
+    _FULL   = 500 * 32   # 16000
+    curriculum = {
+        "perturb_moderate_w": CurriculumTermCfg(
+            func=reward_curriculum,
+            params={"reward_name": "perturb_moderate", "stages": [
+                {"step": 0,        "weight": 0.0},
+                {"step": _WARMUP,  "weight": -0.1},
+                {"step": _FULL,    "weight": -0.2},   # b2
+            ]},
+        ),
+        "perturb_large_w": CurriculumTermCfg(
+            func=reward_curriculum,
+            params={"reward_name": "perturb_large", "stages": [
+                {"step": 0,        "weight": 0.0},
+                {"step": _WARMUP,  "weight": -100.0},  # b3
+            ]},
+        ),
+        "topple_threshold": CurriculumTermCfg(
+            func=termination_curriculum,
+            params={"termination_name": "topple", "stages": [
+                {"step": 0,        "params": {"threshold": 1e9}},
+                {"step": _WARMUP,  "params": {"threshold": 0.4}},
+            ]},
+        ),
     }
 
 
@@ -415,6 +510,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         events=events,
         rewards=rewards,
         terminations=terminations,
+        curriculum=curriculum,
         viewer=ViewerConfig(
             origin_type=ViewerConfig.OriginType.WORLD,
             distance=1.0,
