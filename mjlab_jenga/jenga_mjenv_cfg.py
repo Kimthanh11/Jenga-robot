@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -7,7 +8,7 @@ import mujoco
 import torch
 import math
 
-from mjlab.utils.lab_api.math import quat_apply_inverse
+from mjlab.utils.lab_api.math import quat_apply_inverse, quat_apply
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.actuator.xml_actuator import XmlActuatorCfg
 from mjlab.entity import Entity, EntityArticulationInfoCfg, EntityCfg
@@ -24,7 +25,7 @@ from mjlab.envs.mdp.actions import (
     RelativeJointPositionActionCfg,
 )
 from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
-from mjlab.managers.action_manager import ActionTermCfg
+from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import (
   ObservationGroupCfg,
@@ -53,6 +54,8 @@ BLOCKS_PER_LAYER = 3
 
 BLOCK_SIZE = (0.05, 0.15, 0.03)
 BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
+CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
+CONTACT_Z_LIMIT = BLOCK_HALF_SIZE[2]
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
@@ -148,8 +151,8 @@ def _get_hook_spec() -> mujoco.MjSpec:
   <worldbody>
     <body name="hook" pos="0 0 0">
       <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.18 0.02" limited="true" damping="2"/>
-      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.01 0.01" limited="true" damping="2"/>
-      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.002 0.07" limited="true" damping="2"/>
+      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.075 0.075" limited="true" damping="2"/>
+      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.015 0.015" limited="true" damping="2"/>
       <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 60" limited="true" damping="2"/>
 
       <geom type="box"
@@ -171,8 +174,8 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <actuator>
     <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>    
-    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.01 0.01" kp="50"/>
-    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.002 0.07" kp="50"/>
+    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.075 0.075" kp="50"/>
+    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.015 0.015" kp="50"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
   </actuator>
 </mujoco>
@@ -382,9 +385,9 @@ def hook_tip_pos_in_block_frame(env : ManagerBasedRlEnv, asset_cfg : SceneEntity
     hook_tip_pos_world = hook_tip_pos(env)
 
     position = hook_tip_pos_world - block_pos_world #vector from block_center to tip of the hook
-    rotation = quat_apply_inverse(block_quat_world, position)
+    hook_tip_pos_block  = quat_apply_inverse(block_quat_world, position)
 
-    return rotation
+    return hook_tip_pos_block 
 
 
 def _initial_block_pos(block_name: str) -> torch.Tensor:
@@ -480,6 +483,10 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
         hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
         movement_rel = target_block_relative_movement(env)
+        hook_tip_block = hook_tip_pos_in_block_frame(env)
+        block_touch_term = env.action_manager.get_term("block_local_touch")
+        touch_raw = block_touch_term.raw_action
+        touch_target = block_touch_term._processed_targets
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
@@ -497,6 +504,12 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"act_y={action[:, 1].mean().item():.5f}",
             f"act_z={action[:, 2].mean().item():.5f}",
             f"act_yaw={action[:, 3].mean().item():.5f}",
+            f"tip_block_y={hook_tip_block[:, 1].mean().item():.5f}",
+            f"tip_block_z={hook_tip_block[:, 2].mean().item():.5f}",
+            f"touch_raw_y={touch_raw[:, 0].mean().item():.5f}",
+            f"touch_raw_z={touch_raw[:, 1].mean().item():.5f}",
+            f"touch_target_y={touch_target[:, 0].mean().item():.5f}",
+            f"touch_target_z={touch_target[:, 1].mean().item():.5f}",
             f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
             f"joint_x={hook_joint_pos[:, 0].mean().item():.5f}",
             f"joint_y={hook_joint_pos[:, 1].mean().item():.5f}",
@@ -567,6 +580,131 @@ def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
     return horizontal_movement > 0.06
 
 
+def block_vector_to_world(
+    env: ManagerBasedRlEnv,
+    vector_block: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """Rotate a vector from the target block frame into the world frame."""
+    _, block_quat_world = target_block_pose(env, asset_cfg)
+    vector_block = vector_block.to(
+        device=block_quat_world.device,
+        dtype=block_quat_world.dtype,
+    )
+    if vector_block.ndim == 1:
+        vector_block = vector_block.unsqueeze(0).repeat(env.num_envs, 1)
+    return quat_apply(block_quat_world, vector_block)
+
+
+def block_point_to_world(
+    env: ManagerBasedRlEnv,
+    point_block: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """Transform a point from the target block frame into the world frame."""
+    block_pos_world, _ = target_block_pose(env, asset_cfg)
+    return block_pos_world + block_vector_to_world(env, point_block, asset_cfg)
+
+
+def block_contact_to_hook_yz_targets(
+    env: ManagerBasedRlEnv,
+    contact_block: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    contact_block = contact_block.clone()
+    contact_block[:, 1] = torch.clamp(
+        contact_block[:, 1],
+        -CONTACT_Y_LIMIT,
+        CONTACT_Y_LIMIT,
+    )
+    contact_block[:, 2] = torch.clamp(
+        contact_block[:, 2],
+        -CONTACT_Z_LIMIT,
+        CONTACT_Z_LIMIT,
+    )
+
+    contact_world = block_point_to_world(env, contact_block, asset_cfg)
+    hook_tip_world = hook_tip_pos(env)
+
+    hook_asset = env.scene[_HOOK_ALL_CFG.name]
+    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+
+    current_y = hook_joint_pos[:, 1]
+    current_z = hook_joint_pos[:, 2]
+
+    target_y = current_y + (contact_world[:, 1] - hook_tip_world[:, 1])
+    target_z = current_z + (contact_world[:, 2] - hook_tip_world[:, 2])
+
+    target_y = torch.clamp(target_y, -CONTACT_Y_LIMIT, CONTACT_Y_LIMIT)
+    target_z = torch.clamp(target_z, -CONTACT_Z_LIMIT, CONTACT_Z_LIMIT)
+
+    return torch.stack([target_y, target_z], dim=-1)
+
+
+@dataclass(kw_only=True)
+class BlockLocalHookYZActionCfg(ActionTermCfg):
+    """Choose hook y/z contact coordinates in the target block frame."""
+
+    scale: tuple[float, float] = (CONTACT_Y_LIMIT, CONTACT_Z_LIMIT)
+    contact_x: float = 0.0
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG
+
+    def build(self, env: ManagerBasedRlEnv) -> BlockLocalHookYZAction:
+        return BlockLocalHookYZAction(self, env)
+
+
+class BlockLocalHookYZAction(ActionTerm):
+    """Policy action [y_block, z_block] -> hook_slide_y/z position targets."""
+
+    cfg: BlockLocalHookYZActionCfg
+
+    def __init__(self, cfg: BlockLocalHookYZActionCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg=cfg, env=env)
+        joint_ids, joint_names = self._entity.find_joints(
+            ("hook_slide_y", "hook_slide_z"),
+            preserve_order=True,
+        )
+        self._target_ids = torch.tensor(joint_ids, device=self.device, dtype=torch.long)
+        self._target_names = joint_names
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._processed_targets = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._scale = torch.tensor(cfg.scale, device=self.device).view(1, 2)
+
+    @property
+    def action_dim(self) -> int:
+        return 2
+
+    @property
+    def raw_action(self) -> torch.Tensor:
+        return self._raw_actions
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        self._raw_actions[:] = actions
+
+        contact_block = torch.zeros(self.num_envs, 3, device=self.device)
+        scaled_actions = self._raw_actions * self._scale
+        contact_block[:, 0] = self.cfg.contact_x
+        contact_block[:, 1] = scaled_actions[:, 0]
+        contact_block[:, 2] = scaled_actions[:, 1]
+
+        self._processed_targets = block_contact_to_hook_yz_targets(
+            self._env,
+            contact_block,
+            self.cfg.asset_cfg,
+        )
+
+    def apply_actions(self) -> None:
+        self._entity.set_joint_position_target(
+            self._processed_targets,
+            joint_ids=self._target_ids,
+        )
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self._processed_targets[env_ids] = 0.0
+
 
 
 
@@ -595,6 +733,9 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "block_all_pos": ObservationTermCfg(
             func=all_block_pos,
         ),
+        "hook_tip_block_local_position": ObservationTermCfg(
+            func=hook_tip_pos_in_block_frame
+        ),
         #"block_all_vel": ObservationTermCfg(
          #   func=target_block_vel,
           #  params={"asset_cfg": _ALL_BLOCK_CFGS},
@@ -616,15 +757,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             scale=0.03,
             clip={"hook_slide": (-0.6, 0.6)},
         ),
-        "touch_y": RelativeJointPositionActionCfg(
+        "block_local_touch": BlockLocalHookYZActionCfg( #yields 2 actions
             entity_name="hook",
-            actuator_names=("hook_slide_y",),
-            scale=0.000,
-        ),
-        "touch_z": RelativeJointPositionActionCfg(
-            entity_name="hook",
-            actuator_names=("hook_slide_z",),
-            scale=0.000,
+            scale=(CONTACT_Y_LIMIT, CONTACT_Z_LIMIT),
+            asset_cfg=_TARGET_BLOCK_CFG,
         ),
         "yaw" : RelativeJointPositionActionCfg(
             entity_name="hook",
