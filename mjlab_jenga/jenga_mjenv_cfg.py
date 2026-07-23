@@ -407,12 +407,13 @@ SUCCESS_CURRICULUM_STEPS = 100_000
 TOUCH_CURRICULUM_START = 0.0
 TOUCH_CURRICULUM_END = 1.0
 TOUCH_CURRICULUM_BEGIN_STEP = 10_000
-TOUCH_CURRICULUM_STEPS = 20_000
+TOUCH_CURRICULUM_STEPS = 50_000
 YAW_CURRICULUM_START = 0.0
 YAW_CURRICULUM_END = 1.0
-YAW_CURRICULUM_BEGIN_STEP = 20_000
-YAW_CURRICULUM_STEPS = 40_000
+YAW_CURRICULUM_BEGIN_STEP = 60_000
+YAW_CURRICULUM_STEPS = 80_000
 YAW_TARGET_LIMIT = 1.0
+ACTION_CLIP = 1.0
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
@@ -724,7 +725,7 @@ class BlockLocalHookYZAction(ActionTerm):
         return self._raw_actions
 
     def process_actions(self, actions: torch.Tensor) -> None:
-        self._raw_actions[:] = actions
+        self._raw_actions[:] = torch.clamp(actions, -ACTION_CLIP, ACTION_CLIP)
 
         contact_block = torch.zeros(self.num_envs, 3, device=self.device)
         scaled_actions = self._raw_actions * self._scale * touch_curriculum_scale(self._env)
@@ -786,7 +787,7 @@ class CurriculumYawAction(ActionTerm):
         return self._raw_actions
 
     def process_actions(self, actions: torch.Tensor) -> None:
-        self._raw_actions[:] = actions
+        self._raw_actions[:] = torch.clamp(actions, -ACTION_CLIP, ACTION_CLIP)
 
         joint_pos = self._entity.data.joint_pos[:, self._target_ids]
         delta_yaw = self._raw_actions * self.cfg.scale * yaw_curriculum_scale(self._env)
