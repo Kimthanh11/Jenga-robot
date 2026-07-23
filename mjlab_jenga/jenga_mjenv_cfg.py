@@ -54,8 +54,10 @@ BLOCKS_PER_LAYER = 3
 
 BLOCK_SIZE = (0.05, 0.15, 0.03)
 BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
+CONTACT_X_LIMIT = BLOCK_HALF_SIZE[0]
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
 CONTACT_Z_LIMIT = BLOCK_HALF_SIZE[2]
+CONTACT_FACE_Y = -CONTACT_Y_LIMIT
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
@@ -404,14 +406,14 @@ PERTURBATION_CURRICULUM_STEPS = 100_000
 SUCCESS_CURRICULUM_START = 0.35
 SUCCESS_CURRICULUM_END = 0.75
 SUCCESS_CURRICULUM_STEPS = 100_000
-TOUCH_CURRICULUM_START = 0.0
+TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
-TOUCH_CURRICULUM_BEGIN_STEP = 10_000
-TOUCH_CURRICULUM_STEPS = 50_000
+TOUCH_CURRICULUM_BEGIN_STEP = 0
+TOUCH_CURRICULUM_STEPS = 1
 YAW_CURRICULUM_START = 0.0
 YAW_CURRICULUM_END = 1.0
-YAW_CURRICULUM_BEGIN_STEP = 60_000
-YAW_CURRICULUM_STEPS = 80_000
+YAW_CURRICULUM_BEGIN_STEP = 0
+YAW_CURRICULUM_STEPS = 40_000
 YAW_TARGET_LIMIT = 1.0
 ACTION_CLIP = 1.0
 # Rewards
@@ -529,6 +531,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         block_touch_term = env.action_manager.get_term("block_local_touch")
         touch_raw = block_touch_term.raw_action
         touch_target = block_touch_term._processed_targets
+        contact_block = block_touch_term._contact_block
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
@@ -550,8 +553,11 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"act_yaw={action[:, 3].mean().item():.5f}",
             f"tip_block_y={hook_tip_block[:, 1].mean().item():.5f}",
             f"tip_block_z={hook_tip_block[:, 2].mean().item():.5f}",
-            f"touch_raw_y={touch_raw[:, 0].mean().item():.5f}",
+            f"touch_raw_x={touch_raw[:, 0].mean().item():.5f}",
             f"touch_raw_z={touch_raw[:, 1].mean().item():.5f}",
+            f"contact_block_x={contact_block[:, 0].mean().item():.5f}",
+            f"contact_block_y={contact_block[:, 1].mean().item():.5f}",
+            f"contact_block_z={contact_block[:, 2].mean().item():.5f}",
             f"touch_target_y={touch_target[:, 0].mean().item():.5f}",
             f"touch_target_z={touch_target[:, 1].mean().item():.5f}",
             f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
@@ -656,6 +662,11 @@ def block_contact_to_hook_yz_targets(
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
 ) -> torch.Tensor:
     contact_block = contact_block.clone()
+    contact_block[:, 0] = torch.clamp(
+        contact_block[:, 0],
+        -CONTACT_X_LIMIT,
+        CONTACT_X_LIMIT,
+    )
     contact_block[:, 1] = torch.clamp(
         contact_block[:, 1],
         -CONTACT_Y_LIMIT,
@@ -687,10 +698,10 @@ def block_contact_to_hook_yz_targets(
 
 @dataclass(kw_only=True)
 class BlockLocalHookYZActionCfg(ActionTermCfg):
-    """Choose hook y/z contact coordinates in the target block frame."""
+    """Choose a contact point on the target block face."""
 
-    scale: tuple[float, float] = (CONTACT_Y_LIMIT, CONTACT_Z_LIMIT)
-    contact_x: float = 0.0
+    scale: tuple[float, float] = (CONTACT_X_LIMIT, CONTACT_Z_LIMIT)
+    contact_y: float = CONTACT_FACE_Y
     asset_cfg: SceneEntityCfg = field(
         default_factory=lambda: SceneEntityCfg("b6_1", body_names=("b6_1",))
     )
@@ -714,6 +725,7 @@ class BlockLocalHookYZAction(ActionTerm):
         self._target_names = joint_names
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
         self._processed_targets = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._contact_block = torch.zeros(self.num_envs, 3, device=self.device)
         self._scale = torch.tensor(cfg.scale, device=self.device).view(1, 2)
 
     @property
@@ -729,9 +741,10 @@ class BlockLocalHookYZAction(ActionTerm):
 
         contact_block = torch.zeros(self.num_envs, 3, device=self.device)
         scaled_actions = self._raw_actions * self._scale * touch_curriculum_scale(self._env)
-        contact_block[:, 0] = self.cfg.contact_x
-        contact_block[:, 1] = scaled_actions[:, 0]
+        contact_block[:, 0] = scaled_actions[:, 0]
+        contact_block[:, 1] = self.cfg.contact_y
         contact_block[:, 2] = scaled_actions[:, 1]
+        self._contact_block[:] = contact_block
 
         self._processed_targets = block_contact_to_hook_yz_targets(
             self._env,
@@ -808,6 +821,7 @@ class CurriculumYawAction(ActionTerm):
             env_ids = slice(None)
         self._raw_actions[env_ids] = 0.0
         self._processed_targets[env_ids] = 0.0
+        self._contact_block[env_ids] = 0.0
 
 
 # Environment conifg
@@ -861,7 +875,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
         "block_local_touch": BlockLocalHookYZActionCfg( #yields 2 actions
             entity_name="hook",
-            scale=(CONTACT_Y_LIMIT, CONTACT_Z_LIMIT),
+            scale=(CONTACT_X_LIMIT, CONTACT_Z_LIMIT),
             asset_cfg=_TARGET_BLOCK_CFG,
         ),
         "yaw" : CurriculumYawActionCfg(
