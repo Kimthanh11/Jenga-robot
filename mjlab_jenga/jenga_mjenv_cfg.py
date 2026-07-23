@@ -823,7 +823,6 @@ class CurriculumYawAction(ActionTerm):
             env_ids = slice(None)
         self._raw_actions[env_ids] = 0.0
         self._processed_targets[env_ids] = 0.0
-        self._contact_block[env_ids] = 0.0
 
 
 # Environment conifg
