@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -404,6 +404,15 @@ PERTURBATION_CURRICULUM_STEPS = 100_000
 SUCCESS_CURRICULUM_START = 0.35
 SUCCESS_CURRICULUM_END = 0.75
 SUCCESS_CURRICULUM_STEPS = 100_000
+TOUCH_CURRICULUM_START = 0.0
+TOUCH_CURRICULUM_END = 1.0
+TOUCH_CURRICULUM_BEGIN_STEP = 10_000
+TOUCH_CURRICULUM_STEPS = 20_000
+YAW_CURRICULUM_START = 0.0
+YAW_CURRICULUM_END = 1.0
+YAW_CURRICULUM_BEGIN_STEP = 20_000
+YAW_CURRICULUM_STEPS = 40_000
+YAW_TARGET_LIMIT = 1.0
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
@@ -453,6 +462,38 @@ def success_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.tensor(scale, device=env.device)
 
 
+def _linear_curriculum_scale(
+    env: ManagerBasedRlEnv,
+    start: float,
+    end: float,
+    begin_step: int,
+    steps: int,
+) -> torch.Tensor:
+    progress = min(max(env.common_step_counter - begin_step, 0) / steps, 1.0)
+    scale = start + (end - start) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def touch_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return _linear_curriculum_scale(
+        env,
+        TOUCH_CURRICULUM_START,
+        TOUCH_CURRICULUM_END,
+        TOUCH_CURRICULUM_BEGIN_STEP,
+        TOUCH_CURRICULUM_STEPS,
+    )
+
+
+def yaw_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return _linear_curriculum_scale(
+        env,
+        YAW_CURRICULUM_START,
+        YAW_CURRICULUM_END,
+        YAW_CURRICULUM_BEGIN_STEP,
+        YAW_CURRICULUM_STEPS,
+    )
+
+
 def success_done_distance(env: ManagerBasedRlEnv) -> torch.Tensor:
     return BLOCK_SIZE[1] * success_curriculum_scale(env)
 
@@ -499,6 +540,8 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"tower_shift_mean={tower_com_shift(env).mean().item():.5f}",
             f"large_mean={tower_large_perturbation(env).mean().item():.5f}",
             f"perturb_scale={perturbation_curriculum_scale(env).item():.3f}",
+            f"touch_scale={touch_curriculum_scale(env).item():.3f}",
+            f"yaw_scale={yaw_curriculum_scale(env).item():.3f}",
             f"action_norm_mean={action_norm(env).mean().item():.5f}",
             f"act_x={action[:, 0].mean().item():.5f}",
             f"act_y={action[:, 1].mean().item():.5f}",
@@ -647,7 +690,9 @@ class BlockLocalHookYZActionCfg(ActionTermCfg):
 
     scale: tuple[float, float] = (CONTACT_Y_LIMIT, CONTACT_Z_LIMIT)
     contact_x: float = 0.0
-    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG
+    asset_cfg: SceneEntityCfg = field(
+        default_factory=lambda: SceneEntityCfg("b6_1", body_names=("b6_1",))
+    )
 
     def build(self, env: ManagerBasedRlEnv) -> BlockLocalHookYZAction:
         return BlockLocalHookYZAction(self, env)
@@ -682,7 +727,7 @@ class BlockLocalHookYZAction(ActionTerm):
         self._raw_actions[:] = actions
 
         contact_block = torch.zeros(self.num_envs, 3, device=self.device)
-        scaled_actions = self._raw_actions * self._scale
+        scaled_actions = self._raw_actions * self._scale * touch_curriculum_scale(self._env)
         contact_block[:, 0] = self.cfg.contact_x
         contact_block[:, 1] = scaled_actions[:, 0]
         contact_block[:, 2] = scaled_actions[:, 1]
@@ -706,6 +751,62 @@ class BlockLocalHookYZAction(ActionTerm):
         self._processed_targets[env_ids] = 0.0
 
 
+
+
+@dataclass(kw_only=True)
+class CurriculumYawActionCfg(ActionTermCfg):
+    """Relative yaw target whose effective scale ramps up during training."""
+
+    scale: float = 0.05
+
+    def build(self, env: ManagerBasedRlEnv) -> CurriculumYawAction:
+        return CurriculumYawAction(self, env)
+
+
+class CurriculumYawAction(ActionTerm):
+    cfg: CurriculumYawActionCfg
+
+    def __init__(self, cfg: CurriculumYawActionCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg=cfg, env=env)
+        joint_ids, joint_names = self._entity.find_joints(
+            ("hook_yaw",),
+            preserve_order=True,
+        )
+        self._target_ids = torch.tensor(joint_ids, device=self.device, dtype=torch.long)
+        self._target_names = joint_names
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._processed_targets = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
+    @property
+    def raw_action(self) -> torch.Tensor:
+        return self._raw_actions
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        self._raw_actions[:] = actions
+
+        joint_pos = self._entity.data.joint_pos[:, self._target_ids]
+        delta_yaw = self._raw_actions * self.cfg.scale * yaw_curriculum_scale(self._env)
+        self._processed_targets = torch.clamp(
+            joint_pos + delta_yaw,
+            -YAW_TARGET_LIMIT,
+            YAW_TARGET_LIMIT,
+        )
+
+    def apply_actions(self) -> None:
+        self._entity.set_joint_position_target(
+            self._processed_targets,
+            joint_ids=self._target_ids,
+        )
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self._processed_targets[env_ids] = 0.0
 
 
 # Environment conifg
@@ -762,10 +863,9 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             scale=(CONTACT_Y_LIMIT, CONTACT_Z_LIMIT),
             asset_cfg=_TARGET_BLOCK_CFG,
         ),
-        "yaw" : RelativeJointPositionActionCfg(
+        "yaw" : CurriculumYawActionCfg(
             entity_name="hook",
-            actuator_names=("hook_yaw",),
-            scale=0.00,
+            scale=0.05,
         ),
     }
 
