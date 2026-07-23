@@ -50,17 +50,23 @@ Rebuild the venv from scratch if it gets corrupted: `rm -rf .venv && uv sync --f
 
 ## Running training
 
-Full run (defaults: 1000 iterations, 4096 envs):
+Full run (defaults: 1000 iterations, **256 envs**):
 ```bash
 cd /home/share/jenga_project/Jenga-robot
-sbatch train.sbatch
+sbatch train.sbatch                 # Mjlab-Jenga        (Boris baseline)
+sbatch train_randblock.sbatch       # Mjlab-Jenga-RandomBlock (random block every episode)
+sbatch train_phase1.sbatch          # Mjlab-Jenga-Phase1 (Fazeli baseline; usually already trained)
 ```
+> ⚠️ **num_envs = 256 is the max that fits in GPU memory for this 27-block tower.**
+> Do NOT raise it — larger values OOM. The sbatch files default to 256; override only
+> to go *lower*: `sbatch train.sbatch ITERS NUM_ENVS`.
+
 Quick smoke test (3 iterations, 256 envs):
 ```bash
-sbatch train.sbatch 3 256
+sbatch train_randblock.sbatch 3 256
 # or interactively, streaming to your terminal:
 srun -p stud --gres=gpu:1 -C 'rtx2080|rtx3080' -c 4 --mem-per-cpu=4G -t 0:20:00 \
-  bash -lc 'PYTHONUNBUFFERED=1 ./.venv/bin/python train.py Mjlab-Jenga \
+  bash -lc 'PYTHONUNBUFFERED=1 ./.venv/bin/python train.py Mjlab-Jenga-RandomBlock \
             --agent.logger tensorboard --agent.max-iterations 3 --env.scene.num-envs 256'
 ```
 
@@ -83,13 +89,17 @@ Logs/checkpoints: `logs/rsl_rl/jenga/<timestamp>/`. Reward terms to watch:
 `Episode_Reward/block_dx`, `Episode_Reward/extraction_success`,
 `Episode_Termination/time_out` — success = extraction_success climbs above 0.
 
-**TensorBoard** (from your laptop):
+**TensorBoard** (from your laptop) — compares the random-block run vs the Phase-1 baseline
+in one board. Run TB *inside* the forwarding ssh session (the login node kills detached
+user processes when the ssh session ends, so `nohup`/`setsid`/`tmux` do NOT survive):
 ```bash
-ssh -L 10000:127.0.0.1:6006 stud_uttsal@mn.ias.informatik.tu-darmstadt.de
-# then on mn:
-cd /home/share/jenga_project/Jenga-robot && tensorboard --port 6006 --logdir=logs
-# open http://127.0.0.1:10000
+ssh -L 6006:127.0.0.1:6006 stud_uttsal@mn.ias.informatik.tu-darmstadt.de \
+  'bash /home/share/jenga_project/Jenga-robot/run_tb.sh'
+# then open http://localhost:6006  (keep this ssh session open while viewing)
 ```
+`run_tb.sh` serves two named runs via `--logdir_spec`: `randblock` (experiment
+`jenga_randblock`) and `phase1` (the finished baseline dir under `logs/rsl_rl/jenga/…`).
+To instead browse *all* runs: `tensorboard --logdir logs/rsl_rl --port 6006 --host 127.0.0.1`.
 
 ## Reference: throughput
 rtx3080, 256 envs: **~2000 env-steps/s** (vs ~21 on an Apple M4 — ~100×).

@@ -17,7 +17,8 @@
 set -euo pipefail
 
 ITERS="${1:-1000}"
-NUM_ENVS="${2:-4096}"
+# 256 is the max num_envs that fits in GPU memory for this 27-block tower; do NOT raise.
+NUM_ENVS="${2:-256}"
 
 cd /home/share/jenga_project/Jenga-robot
 
