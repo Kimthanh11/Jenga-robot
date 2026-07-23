@@ -56,3 +56,15 @@ register_mjlab_task(
     play_env_cfg=_incrand.jenga_env_cfg(play=True),
     rl_cfg=_incrand.jenga_ppo_runner_cfg(),
 )
+
+# V2: same task with touch (y/z contact point) and yaw actions unfrozen via
+# curriculum (Boris's approach adapted to the task frame).
+# Launch: train.py / play.py Mjlab-Jenga-IncompleteRandomV2
+from mjlab_jenga import jenga_incomplete_random_v2_cfg as _incrand_v2  # noqa: E402
+
+register_mjlab_task(
+    task_id="Mjlab-Jenga-IncompleteRandomV2",
+    env_cfg=_incrand_v2.jenga_env_cfg(),
+    play_env_cfg=_incrand_v2.jenga_env_cfg(play=True),
+    rl_cfg=_incrand_v2.jenga_ppo_runner_cfg(),
+)
