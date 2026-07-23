@@ -528,10 +528,12 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
         movement_rel = target_block_relative_movement(env)
         hook_tip_block = hook_tip_pos_in_block_frame(env)
-        block_touch_term = env.action_manager.get_term("block_local_touch")
-        touch_raw = block_touch_term.raw_action
-        touch_target = block_touch_term._processed_targets
-        contact_block = block_touch_term._contact_block
+        touch_raw = torch.clamp(action[:, 1:3], -ACTION_CLIP, ACTION_CLIP)
+        contact_block = torch.zeros(env.num_envs, 3, device=env.device)
+        contact_block[:, 0] = touch_raw[:, 0] * CONTACT_X_LIMIT * touch_curriculum_scale(env)
+        contact_block[:, 1] = CONTACT_FACE_Y
+        contact_block[:, 2] = touch_raw[:, 1] * CONTACT_Z_LIMIT * touch_curriculum_scale(env)
+        touch_target = block_contact_to_hook_yz_targets(env, contact_block)
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
