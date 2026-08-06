@@ -548,6 +548,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         )
         roundtrip_error = contact_roundtrip - contact_block
         tip_contact_error_block = hook_tip_block - contact_block
+        hook_x_joint = hook_joint_pos[:, 0]
         best_env = int(torch.argmax(progress).item())
         worst_env = int(torch.argmin(progress).item())
         print(
@@ -561,8 +562,8 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
             f"transform(roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f})",
-            f"hook(joint_x_mean={hook_joint_pos[:, 0].mean().item():.5f}, joint_x_minmax=({hook_joint_pos[:, 0].min().item():.5f},{hook_joint_pos[:, 0].max().item():.5f}), hook_x_mean={hook_x.mean().item():.5f}, hook_x_minmax=({hook_x.min().item():.5f},{hook_x.max().item():.5f}), joint_yz=({hook_joint_pos[:, 1].mean().item():.5f},{hook_joint_pos[:, 2].mean().item():.5f}), joint_yaw={hook_joint_pos[:, 3].mean().item():.5f})",
-            f"env_compare(best={best_env}:progress={progress[best_env].item():.5f},hook_x={hook_x[best_env].item():.5f},act_x={action[best_env, 0].item():.5f}; worst={worst_env}:progress={progress[worst_env].item():.5f},hook_x={hook_x[worst_env].item():.5f},act_x={action[worst_env, 0].item():.5f})",
+            f"hook(joint_x_mean={hook_x_joint.mean().item():.5f}, joint_x_minmax=({hook_x_joint.min().item():.5f},{hook_x_joint.max().item():.5f}), hook_x_mean={hook_x.mean().item():.5f}, hook_x_minmax=({hook_x.min().item():.5f},{hook_x.max().item():.5f}), joint_yz=({hook_joint_pos[:, 1].mean().item():.5f},{hook_joint_pos[:, 2].mean().item():.5f}), joint_yaw={hook_joint_pos[:, 3].mean().item():.5f})",
+            f"env_compare(best={best_env}:progress={progress[best_env].item():.5f},hook_x={hook_x_joint[best_env].item():.5f},act_x={action[best_env, 0].item():.5f}; worst={worst_env}:progress={progress[worst_env].item():.5f},hook_x={hook_x_joint[worst_env].item():.5f},act_x={action[worst_env, 0].item():.5f})",
             flush=True,
         )
     return torch.zeros(env.num_envs, device=env.device)
