@@ -5,3 +5,9 @@ MUJOCO_LOG.TXT
 jenga.xml
 .vscode/
 wandb/
+# Training artifacts
+logs/
+shared_checkpoints/
+slurm-*.out
+tb_test.log
+*.pt

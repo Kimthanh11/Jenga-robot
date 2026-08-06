@@ -1,0 +1,22 @@
+# Image for training on the IAS Compute Cluster (ICC).
+# Base = official uv image with Python 3.12 baked in. We deliberately avoid a
+# CUDA base + apt: rootless-podman build can't reach the ubuntu/nvidia apt
+# mirrors on the cluster. CUDA runtime is supplied by the torch/mujoco-warp
+# wheels + the GPU driver the cluster injects at `docker run` (GPU passthrough).
+#
+# Build on the login node `mn` (image is then shared to all compute nodes):
+#   docker build -f Dockerfile.cluster -t jenga-cuda .
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_LINK_MODE=copy
+
+# Bake deps from uv.lock (403 pkgs incl. torch/mujoco-warp) so job RAM isn't
+# spent re-installing them. Only lock inputs are copied -> layer caches until
+# deps change; project code is mounted at /work at runtime.
+WORKDIR /build
+COPY pyproject.toml uv.lock README.md .python-version ./
+RUN uv sync --frozen --no-install-project
+
+ENV PATH="/opt/venv/bin:${PATH}"
+WORKDIR /work
