@@ -884,7 +884,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "x_velocity": JointVelocityActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide",),
-            scale=0.03,
+            scale=0.05,
             clip={"hook_slide": (-0.6, 0.6)},
         ),
         "block_local_touch": BlockLocalHookYZActionCfg( #yields 2 actions
