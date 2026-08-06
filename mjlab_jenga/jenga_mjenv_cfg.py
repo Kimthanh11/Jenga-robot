@@ -177,7 +177,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   <actuator>
     <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>    
     <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.075 0.075" kp="50"/>
-    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.015 0.015" kp="50"/>
+    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.015 0.015" kp="100"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
   </actuator>
 </mujoco>
