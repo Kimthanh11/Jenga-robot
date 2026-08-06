@@ -527,6 +527,12 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
         hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
         movement_rel = target_block_relative_movement(env)
+        progress = block_progress(env)
+        success = success_block_extract(env)
+        success_distance = success_done_distance(env)
+        tower_shift = tower_com_shift(env)
+        tower_large = tower_large_perturbation(env)
+        hook_x = hook_x_position(env)
         hook_tip_block = hook_tip_pos_in_block_frame(env)
         touch_raw = torch.clamp(action[:, 1:3], -ACTION_CLIP, ACTION_CLIP)
         contact_block = torch.zeros(env.num_envs, 3, device=env.device)
@@ -545,41 +551,15 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"progress_mean={block_progress(env).mean().item():.5f}",
-            f"success_dist={success_done_distance(env).item():.5f}",
-            f"move_x={movement_rel[:, 0].mean().item():.5f}",
-            f"move_y={movement_rel[:, 1].mean().item():.5f}",
-            f"move_z={movement_rel[:, 2].mean().item():.5f}",
-            f"success_mean={success_block_reward(env).mean().item():.5f}",
-            f"tower_shift_mean={tower_com_shift(env).mean().item():.5f}",
-            f"large_mean={tower_large_perturbation(env).mean().item():.5f}",
-            f"perturb_scale={perturbation_curriculum_scale(env).item():.3f}",
-            f"touch_scale={touch_curriculum_scale(env).item():.3f}",
-            f"yaw_scale={yaw_curriculum_scale(env).item():.3f}",
-            f"action_norm_mean={action_norm(env).mean().item():.5f}",
-            f"act_x={action[:, 0].mean().item():.5f}",
-            f"act_y={action[:, 1].mean().item():.5f}",
-            f"act_z={action[:, 2].mean().item():.5f}",
-            f"act_yaw={action[:, 3].mean().item():.5f}",
-            f"tip_block_y={hook_tip_block[:, 1].mean().item():.5f}",
-            f"tip_block_z={hook_tip_block[:, 2].mean().item():.5f}",
-            f"touch_raw_x={touch_raw[:, 0].mean().item():.5f}",
-            f"touch_raw_z={touch_raw[:, 1].mean().item():.5f}",
-            f"contact_block_x={contact_block[:, 0].mean().item():.5f}",
-            f"contact_block_y={contact_block[:, 1].mean().item():.5f}",
-            f"contact_block_z={contact_block[:, 2].mean().item():.5f}",
-            f"roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f}",
-            f"tip_contact_err_y={tip_contact_error_block[:, 1].mean().item():.5f}",
-            f"tip_contact_err_z={tip_contact_error_block[:, 2].mean().item():.5f}",
-            f"contact_world_y={contact_world[:, 1].mean().item():.5f}",
-            f"contact_world_z={contact_world[:, 2].mean().item():.5f}",
-            f"touch_target_y={touch_target[:, 0].mean().item():.5f}",
-            f"touch_target_z={touch_target[:, 1].mean().item():.5f}",
-            f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
-            f"joint_x={hook_joint_pos[:, 0].mean().item():.5f}",
-            f"joint_y={hook_joint_pos[:, 1].mean().item():.5f}",
-            f"joint_z={hook_joint_pos[:, 2].mean().item():.5f}",
-            f"joint_yaw={hook_joint_pos[:, 3].mean().item():.5f}",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f})",
+            f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
+            f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
+            f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs})",
+            f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
+            f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
+            f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
+            f"transform(roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f})",
+            f"hook(joint_x_mean={hook_joint_pos[:, 0].mean().item():.5f}, joint_x_minmax=({hook_joint_pos[:, 0].min().item():.5f},{hook_joint_pos[:, 0].max().item():.5f}), hook_x_mean={hook_x.mean().item():.5f}, hook_x_minmax=({hook_x.min().item():.5f},{hook_x.max().item():.5f}), joint_yz=({hook_joint_pos[:, 1].mean().item():.5f},{hook_joint_pos[:, 2].mean().item():.5f}), joint_yaw={hook_joint_pos[:, 3].mean().item():.5f})",
             flush=True,
         )
     return torch.zeros(env.num_envs, device=env.device)
