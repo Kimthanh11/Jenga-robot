@@ -534,6 +534,14 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         contact_block[:, 1] = CONTACT_FACE_Y
         contact_block[:, 2] = touch_raw[:, 1] * CONTACT_Z_LIMIT * touch_curriculum_scale(env)
         touch_target = block_contact_to_hook_yz_targets(env, contact_block)
+        block_pos_world, block_quat_world = target_block_pose(env)
+        contact_world = block_point_to_world(env, contact_block)
+        contact_roundtrip = quat_apply_inverse(
+            block_quat_world,
+            contact_world - block_pos_world,
+        )
+        roundtrip_error = contact_roundtrip - contact_block
+        tip_contact_error_block = hook_tip_block - contact_block
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
@@ -560,6 +568,11 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"contact_block_x={contact_block[:, 0].mean().item():.5f}",
             f"contact_block_y={contact_block[:, 1].mean().item():.5f}",
             f"contact_block_z={contact_block[:, 2].mean().item():.5f}",
+            f"roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f}",
+            f"tip_contact_err_y={tip_contact_error_block[:, 1].mean().item():.5f}",
+            f"tip_contact_err_z={tip_contact_error_block[:, 2].mean().item():.5f}",
+            f"contact_world_y={contact_world[:, 1].mean().item():.5f}",
+            f"contact_world_z={contact_world[:, 2].mean().item():.5f}",
             f"touch_target_y={touch_target[:, 0].mean().item():.5f}",
             f"touch_target_z={touch_target[:, 1].mean().item():.5f}",
             f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
