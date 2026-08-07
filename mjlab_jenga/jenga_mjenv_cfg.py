@@ -501,6 +501,14 @@ def success_done_distance(env: ManagerBasedRlEnv) -> torch.Tensor:
     return BLOCK_SIZE[1] * success_curriculum_scale(env)
 
 
+def progress_towards_success_distance_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Dense reward for being closer to the configured extraction success distance."""
+    progress = block_progress(env)
+    target = success_done_distance(env)
+    progress_fraction = torch.clamp(progress / target, 0.0, 1.0)
+    return progress_fraction ** 2
+
+
 def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
     return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
 
@@ -919,6 +927,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "delta_block_progress": RewardTermCfg(
             func=DeltaBlockProgressReward(),
             weight=120.0,
+        ),
+        "progress_towards_success_distance": RewardTermCfg(
+            func=progress_towards_success_distance_reward,
+            weight=2.0,
         ),
         # "torque_penalty": RewardTermCfg(
         #     func=joint_torques_l2,
