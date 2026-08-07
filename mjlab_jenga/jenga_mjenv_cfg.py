@@ -926,12 +926,12 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     rewards = {
         "delta_block_progress": RewardTermCfg(
             func=DeltaBlockProgressReward(),
-            weight=120.0,
+            weight=40.0,
         ),
-        "progress_towards_success_distance": RewardTermCfg(
-            func=progress_towards_success_distance_reward,
-            weight=2.0,
-        ),
+        # "progress_towards_success_distance": RewardTermCfg(
+        #     func=progress_towards_success_distance_reward,
+        #     weight=2.0,
+        # ),
         # "torque_penalty": RewardTermCfg(
         #     func=joint_torques_l2,
         #     weight=-0.01,
