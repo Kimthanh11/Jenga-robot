@@ -403,9 +403,9 @@ _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
 PERTURBATION_CURRICULUM_START = 0.1
 PERTURBATION_CURRICULUM_STEPS = 100_000
-SUCCESS_CURRICULUM_START = 0.35
-SUCCESS_CURRICULUM_END = 0.9
-SUCCESS_CURRICULUM_STEPS = 200_000
+SUCCESS_CURRICULUM_START = 0.75
+SUCCESS_CURRICULUM_END = 0.75
+SUCCESS_CURRICULUM_STEPS = 1
 TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
 TOUCH_CURRICULUM_BEGIN_STEP = 0
@@ -990,7 +990,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
-            num_envs=8,
+            num_envs=256,
             env_spacing=4.0,
         ),
         #scale_rewards_by_dt=False,
