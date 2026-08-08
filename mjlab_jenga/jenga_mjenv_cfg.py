@@ -54,6 +54,11 @@ BLOCKS_PER_LAYER = 3
 
 BLOCK_SIZE = (0.05, 0.15, 0.03)
 BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
+# Per-block build-time domain randomization. Keep this small: larger shape
+# variation can create unrealistic overlaps in the stacked tower.
+BLOCK_DENSITY = 650.0
+BLOCK_DENSITY_RANDOMIZATION = 0.08
+BLOCK_SIZE_RANDOMIZATION = (0.005, 0.005, 0.005)
 CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
 CONTACT_Z_LIMIT = 0.006
@@ -128,6 +133,19 @@ def _get_block_infos():
             sliding = rng.uniform(0.2, 0.4)
             torsional = rng.uniform(0.01, 0.06)
             friction = (sliding, torsional, 0.001)
+            density = BLOCK_DENSITY * rng.uniform(
+                1.0 - BLOCK_DENSITY_RANDOMIZATION,
+                1.0 + BLOCK_DENSITY_RANDOMIZATION,
+            )
+            size = tuple(
+                nominal_size
+                * rng.uniform(1.0 - randomization, 1.0 + randomization)
+                for nominal_size, randomization in zip(
+                    BLOCK_SIZE,
+                    BLOCK_SIZE_RANDOMIZATION,
+                    strict=True,
+                )
+            )
 
             block_infos.append({
                 "name": f"b{layer}_{block}",
@@ -135,6 +153,8 @@ def _get_block_infos():
                 "quat": quat,
                 "color": color,
                 "friction": friction,
+                "density": density,
+                "half_size": tuple(value / 2 for value in size),
             })
 
     return block_infos
@@ -221,7 +241,7 @@ def _get_block_cfg(block_info) -> EntityCfg:
   <compiler angle="degree" coordinate="local"/>
 
     <default>
-    <geom density="650"
+    <geom density="{block_info["density"]}"
             margin="0"
             gap="0"/>
     </default>
@@ -231,7 +251,7 @@ def _get_block_cfg(block_info) -> EntityCfg:
       <joint name="{block_info["name"]}_free" type="free"/>
 
       <geom type="box"
-            size="{_vec(BLOCK_HALF_SIZE)}"
+            size="{_vec(block_info["half_size"])}"
             rgba="{_vec(block_info["color"])}"
             friction="{_vec(block_info["friction"])}"/>
     </body>
