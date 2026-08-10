@@ -1183,7 +1183,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
-            num_envs=256,
+            num_envs=384,
             env_spacing=4.0,
         ),
         #scale_rewards_by_dt=False,
@@ -1255,7 +1255,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="jenga",
     save_interval=500,
     num_steps_per_env=32,
-    max_iterations=2000,
+    max_iterations=10000,
   )
 
 

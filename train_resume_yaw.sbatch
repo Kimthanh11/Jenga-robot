@@ -1,31 +1,31 @@
 #!/bin/bash
-# Resume Mjlab-Jenga training for yaw phase on the IAS cluster.
+# Resume Mjlab-Jenga training for the staged curriculum on the IAS cluster.
 #
 # Usage from repo root:
 #   sbatch train_resume_yaw.sbatch
-#   sbatch train_resume_yaw.sbatch 2000 256
-#   sbatch train_resume_yaw.sbatch 2000 256 2026-07-23_12-34-56 model_1999.pt
+#   sbatch train_resume_yaw.sbatch 10000 384
+#   sbatch train_resume_yaw.sbatch 10000 384 2026-07-23_12-34-56 model_1999.pt
 #
 # Args:
-#   1: additional iterations, default 2000
-#   2: num envs, default 256
+#   1: additional iterations, default 10000
+#   2: num envs, default 384
 #   3: run folder under logs/rsl_rl/jenga, optional
 #   4: checkpoint file inside that run folder, optional
 
-#SBATCH --job-name=jenga_yaw
+#SBATCH --job-name=jenga_curriculum
 #SBATCH -p stud
 #SBATCH --gres=gpu:1
 #SBATCH -C 'rtx2080|rtx3080'
 #SBATCH -c 1
 #SBATCH --mem-per-cpu=4G
-#SBATCH -t 04:00:00
-#SBATCH --output=logs/slurm/jenga_yaw-%j.out
-#SBATCH --error=logs/slurm/jenga_yaw-%j.out
+#SBATCH -t 12:00:00
+#SBATCH --output=logs/slurm/jenga_curriculum-%j.out
+#SBATCH --error=logs/slurm/jenga_curriculum-%j.out
 
 set -euo pipefail
 
-ITERS="${1:-2000}"
-NUM_ENVS="${2:-256}"
+ITERS="${1:-10000}"
+NUM_ENVS="${2:-384}"
 LOAD_RUN="${3:-}"
 LOAD_CHECKPOINT="${4:-}"
 
