@@ -57,8 +57,8 @@ BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
 # Per-block build-time domain randomization. Keep this small: larger shape
 # variation can create unrealistic overlaps in the stacked tower.
 BLOCK_DENSITY = 650.0
-BLOCK_DENSITY_RANDOMIZATION = 0.08
-BLOCK_SIZE_RANDOMIZATION = (0.005, 0.005, 0.005)
+BLOCK_DENSITY_RANDOMIZATION = 0.0
+BLOCK_SIZE_RANDOMIZATION = (0.0, 0.0, 0.0)
 CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
 CONTACT_Z_LIMIT = 0.006
@@ -576,13 +576,13 @@ PERTURBATION_CURRICULUM_STEPS = 100_000
 SUCCESS_CURRICULUM_START = 0.75
 SUCCESS_CURRICULUM_END = 0.75
 SUCCESS_CURRICULUM_STEPS = 1
-TOUCH_CURRICULUM_START = 0.0
+TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
-TOUCH_CURRICULUM_BEGIN_STEP = 20_000
-TOUCH_CURRICULUM_STEPS = 40_000
+TOUCH_CURRICULUM_BEGIN_STEP = 0
+TOUCH_CURRICULUM_STEPS = 1
 YAW_CURRICULUM_START = 0.0
-YAW_CURRICULUM_END = 0.25
-YAW_CURRICULUM_BEGIN_STEP = 80_000
+YAW_CURRICULUM_END = 0.0
+YAW_CURRICULUM_BEGIN_STEP = 40_000
 YAW_CURRICULUM_STEPS = 80_000
 YAW_TARGET_LIMIT = 1.0
 ACTION_CLIP = 1.0
@@ -1107,12 +1107,12 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     rewards = {
         "delta_block_progress": RewardTermCfg(
             func=DeltaBlockProgressReward(),
-            weight=40.0,
+            weight=120.0,
         ),
-        # "progress_towards_success_distance": RewardTermCfg(
-        #     func=progress_towards_success_distance_reward,
-        #     weight=2.0,
-        # ),
+        "progress_towards_success_distance": RewardTermCfg(
+            func=progress_towards_success_distance_reward,
+            weight=2.0,
+        ),
         # "torque_penalty": RewardTermCfg(
         #     func=joint_torques_l2,
         #     weight=-0.01,
@@ -1183,7 +1183,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
-            num_envs=384,
+            num_envs=256,
             env_spacing=4.0,
         ),
         #scale_rewards_by_dt=False,

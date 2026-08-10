@@ -3,12 +3,12 @@
 #
 # Usage from repo root:
 #   sbatch train_curriculum.sbatch
-#   sbatch train_curriculum.sbatch 10000 384
+#   sbatch train_curriculum.sbatch 2000 256
 #   sbatch train_curriculum.sbatch 10000 256
 #
 # Args:
 #   1: iterations, default 10000
-#   2: num envs, default 384
+#   2: num envs, default 256
 
 #SBATCH --job-name=jenga_curriculum
 #SBATCH -p stud
@@ -23,7 +23,7 @@
 set -euo pipefail
 
 ITERS="${1:-10000}"
-NUM_ENVS="${2:-384}"
+NUM_ENVS="${2:-256}"
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm
