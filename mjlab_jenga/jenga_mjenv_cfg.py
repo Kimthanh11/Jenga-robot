@@ -68,6 +68,12 @@ SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
 LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 
+MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 20_000
+MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 40_000
+MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.75
+MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
+MISSING_BLOCK_PARK_SPACING = 0.2
+
 COLOR_A = (0.68, 0.85, 0.90, 1.0)
 COLOR_B = (0.96, 0.96, 0.95, 1.0)
 
@@ -158,6 +164,119 @@ def _get_block_infos():
             })
 
     return block_infos
+
+
+MISSING_BLOCK_PATTERNS = (
+    (),
+    ("b4_1",),
+    ("b4_3",),
+    ("b5_2",),
+    ("b4_1", "b4_3"),
+    ("b4_1", "b5_2"),
+    ("b4_3", "b5_2"),
+    ("b4_1", "b4_3", "b5_2"),
+)
+MISSING_BLOCK_CANDIDATES = tuple(
+    sorted({block_name for pattern in MISSING_BLOCK_PATTERNS for block_name in pattern})
+)
+_INITIAL_BLOCK_POS_BY_NAME = {
+    block_info["name"]: torch.tensor(block_info["pos"], dtype=torch.float32)
+    for block_info in _get_block_infos()
+}
+
+
+def missing_block_randomization_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Probability that a reset uses a non-empty missing-block pattern."""
+    progress = min(
+        max(
+            env.common_step_counter - MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP,
+            0,
+        )
+        / MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS,
+        1.0,
+    )
+    return torch.tensor(
+        progress * MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY,
+        device=env.device,
+    )
+
+
+def _ensure_missing_block_state(env: ManagerBasedRlEnv) -> torch.Tensor:
+    if not hasattr(env, "_jenga_missing_block_mask"):
+        env._jenga_missing_block_mask = torch.zeros(
+            env.num_envs,
+            len(MISSING_BLOCK_CANDIDATES),
+            dtype=torch.bool,
+            device=env.device,
+        )
+        env._jenga_missing_pattern_id = torch.zeros(
+            env.num_envs,
+            dtype=torch.long,
+            device=env.device,
+        )
+    return env._jenga_missing_block_mask
+
+
+def current_missing_block_mask(
+    env: ManagerBasedRlEnv,
+    block_name: str,
+) -> torch.Tensor:
+    mask = getattr(env, "_jenga_missing_block_mask", None)
+    if mask is None or block_name not in MISSING_BLOCK_CANDIDATES:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    return mask[:, MISSING_BLOCK_CANDIDATES.index(block_name)]
+
+
+def randomize_missing_blocks(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | slice | None,
+) -> None:
+    if env_ids is None:
+        env_ids = torch.arange(env.num_envs, device=env.device)
+    elif isinstance(env_ids, slice):
+        env_ids = torch.arange(env.num_envs, device=env.device)[env_ids]
+
+    num_resets = len(env_ids)
+    pattern_ids = torch.zeros(num_resets, dtype=torch.long, device=env.device)
+    missing_probability = missing_block_randomization_scale(env)
+
+    if len(MISSING_BLOCK_PATTERNS) > 1 and missing_probability.item() > 0.0:
+        use_missing_pattern = torch.rand(num_resets, device=env.device) < missing_probability
+        num_missing_patterns = int(use_missing_pattern.sum().item())
+        if num_missing_patterns > 0:
+            pattern_ids[use_missing_pattern] = torch.randint(
+                1,
+                len(MISSING_BLOCK_PATTERNS),
+                (num_missing_patterns,),
+                device=env.device,
+            )
+
+    missing_mask = _ensure_missing_block_state(env)
+    missing_mask[env_ids] = False
+    env._jenga_missing_pattern_id[env_ids] = pattern_ids
+
+    base_park_offset = torch.tensor(
+        MISSING_BLOCK_PARK_OFFSET,
+        device=env.device,
+        dtype=torch.float32,
+    )
+
+    for candidate_idx, block_name in enumerate(MISSING_BLOCK_CANDIDATES):
+        missing_for_block = torch.zeros(num_resets, dtype=torch.bool, device=env.device)
+        for pattern_idx, pattern in enumerate(MISSING_BLOCK_PATTERNS):
+            if block_name in pattern:
+                missing_for_block |= pattern_ids == pattern_idx
+
+        missing_mask[env_ids, candidate_idx] = missing_for_block
+
+        asset: Entity = env.scene[block_name]
+        root_state = asset.data.default_root_state[env_ids].clone()
+        park_offset = base_park_offset.clone()
+        park_offset[0] += MISSING_BLOCK_PARK_SPACING * candidate_idx
+        root_state[missing_for_block, :3] += park_offset
+        root_state[:, 7:] = 0.0
+        asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
 
 # loads the jenga_xml into an Mjspec, which is editable
@@ -335,11 +454,25 @@ def get_com_per_block(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TAR
 
 def get_com_tower(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     """
-    get the COM of the tower.
+    get the COM of all present tower blocks except the target block.
     """
-    block_com = get_com_per_block(env, asset_cfg)
-    com_total_tower = torch.mean(block_com, dim=1)
-    return com_total_tower
+    target_block_name = asset_cfg.name
+    total_com = torch.zeros(env.num_envs, 3, device=env.device)
+    present_count = torch.zeros(env.num_envs, device=env.device)
+
+    for block in _get_block_infos():
+        block_name = block["name"]
+        if block_name == target_block_name:
+            continue
+
+        asset: Entity = env.scene[block_name]
+        block_com = asset.data.body_com_pos_w[:, 0, :]
+        present = ~current_missing_block_mask(env, block_name)
+        present_weight = present.to(dtype=block_com.dtype)
+        total_com += block_com * present_weight.unsqueeze(-1)
+        present_count += present_weight
+
+    return total_com / present_count.clamp_min(1.0).unsqueeze(-1)
 
 def initial_tower_com(
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
@@ -364,6 +497,26 @@ def initial_tower_com(
 _START_TOWER_COM  = initial_tower_com()
 
 
+def initial_tower_com_for_current_missing_pattern(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    target_block_name = asset_cfg.name
+    total_com = torch.zeros(env.num_envs, 3, device=env.device)
+    present_count = torch.zeros(env.num_envs, device=env.device)
+
+    for block_name, block_pos in _INITIAL_BLOCK_POS_BY_NAME.items():
+        if block_name == target_block_name:
+            continue
+
+        present = ~current_missing_block_mask(env, block_name)
+        present_weight = present.to(dtype=total_com.dtype)
+        total_com += block_pos.to(env.device).unsqueeze(0) * present_weight.unsqueeze(-1)
+        present_count += present_weight
+
+    return total_com / present_count.clamp_min(1.0).unsqueeze(-1)
+
+
 def tower_com_shift(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
@@ -372,7 +525,8 @@ def tower_com_shift(
     Computes the horizontal shift of the COM of the Tower.
     """
     current = get_com_tower(env, asset_cfg)
-    movement = current - _START_TOWER_COM.to(current.device)
+    start = initial_tower_com_for_current_missing_pattern(env, asset_cfg)
+    movement = current - start
     horizontal_shift = torch.norm(movement[:, :2], dim=-1)
     return horizontal_shift
 
@@ -577,15 +731,22 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         roundtrip_error = contact_roundtrip - contact_block
         tip_contact_error_block = hook_tip_block - contact_block
         hook_x_joint = hook_joint_pos[:, 0]
+        missing_mask = getattr(env, "_jenga_missing_block_mask", None)
+        if missing_mask is None:
+            missing_env_count = 0
+            missing_block_count = 0
+        else:
+            missing_env_count = int(torch.any(missing_mask, dim=1).sum().item())
+            missing_block_count = int(missing_mask.sum().item())
         best_env = int(torch.argmax(progress).item())
         worst_env = int(torch.argmin(progress).item())
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f})",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f})",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
-            f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs})",
+            f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
@@ -939,6 +1100,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
                 "velocity_range": (-0.01, 0.01),
                 "asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide_z",))
             }
+        ),
+        "randomize_missing_blocks": EventTermCfg(
+            func=randomize_missing_blocks,
+            mode="reset",
         ),
     }
 
