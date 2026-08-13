@@ -26,6 +26,7 @@ from mjlab.envs.mdp.actions import (
 )
 from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
 from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
+from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import (
   ObservationGroupCfg,
@@ -73,6 +74,28 @@ MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 120_000
 MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
 MISSING_BLOCK_PARK_SPACING = 0.2
+RANDOM_TARGET_BLOCK_BEGIN_STEP = 360_000
+RANDOM_TARGET_BLOCK_RAMP_STEPS = 120_000
+RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.50
+FIXED_TARGET_BLOCK_NAME = "b6_1"
+RANDOM_TARGET_BLOCK_NAMES = (
+    "b1_1",
+    "b1_3",
+    "b2_1",
+    "b2_2",
+    "b2_3",
+    "b3_1",
+    "b6_1",
+    "b6_3",
+    "b7_1",
+    "b7_3",
+    "b9_1",
+    "b9_2",
+    "b9_3",
+)
+HOOK_BASE_POS = (0.15, 0.05, 0.16)
+HOOK_TIP_LOCAL_X = -0.056
+HOOK_APPROACH_GAP = 0.02
 
 COLOR_A = (0.68, 0.85, 0.90, 1.0)
 COLOR_B = (0.96, 0.96, 0.95, 1.0)
@@ -181,6 +204,342 @@ _INITIAL_BLOCK_POS_BY_NAME = {
 }
 
 
+def random_target_block_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Probability that a reset uses a random target block instead of b6_1."""
+    progress = (
+        max(
+            env.common_step_counter - RANDOM_TARGET_BLOCK_BEGIN_STEP,
+            0,
+        )
+        / RANDOM_TARGET_BLOCK_RAMP_STEPS
+    )
+    return torch.tensor(
+        min(progress, 1.0) * RANDOM_TARGET_BLOCK_END_PROBABILITY,
+        device=env.device,
+    )
+
+
+def _rz_quat(angle_rad: float) -> tuple[float, float, float, float]:
+    return (math.cos(angle_rad / 2), 0.0, 0.0, math.sin(angle_rad / 2))
+
+
+def _target_block_entries() -> tuple[list[str], list[dict]]:
+    entries = []
+    names = []
+    long_half = BLOCK_SIZE[1] / 2
+    tip_offset = -HOOK_TIP_LOCAL_X
+
+    for block_info in _get_block_infos():
+        name = block_info["name"]
+        names.append(name)
+        cx, cy, cz = block_info["pos"]
+        layer = int(name[1:].split("_")[0])
+        even_layer = layer % 2 == 0
+
+        if even_layer:
+            yaw_home = 0.0
+            extraction_w = (-1.0, 0.0, 0.0)
+            slide_home = cx + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[0]
+            slide_y_home = cy - HOOK_BASE_POS[1]
+            task_quat = _rz_quat(math.pi)
+        else:
+            yaw_home = math.pi / 2
+            extraction_w = (0.0, -1.0, 0.0)
+            slide_home = cy + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[1]
+            slide_y_home = HOOK_BASE_POS[0] - cx
+            task_quat = _rz_quat(-math.pi / 2)
+
+        entries.append(
+            {
+                "name": name,
+                "layer": layer,
+                "start_pos": (cx, cy, cz),
+                "extraction_w": extraction_w,
+                "task_quat": task_quat,
+                # Order matches our hook joint order: slide, slide_y, slide_z, yaw.
+                "hook_home": (
+                    slide_home,
+                    slide_y_home,
+                    cz - HOOK_BASE_POS[2],
+                    yaw_home,
+                ),
+            }
+        )
+
+    by_layer: dict[int, list[int]] = {}
+    for idx, entry in enumerate(entries):
+        by_layer.setdefault(entry["layer"], []).append(idx)
+
+    for idx, entry in enumerate(entries):
+        entry["neighbors"] = [other for other in by_layer[entry["layer"]] if other != idx]
+
+    return names, entries
+
+
+class TargetBlockCommand(CommandTerm):
+    """Curriculum command for target-block selection and hook teleport.
+
+    At the beginning, every env keeps the old fixed target b6_1. Once
+    random_target_block_scale becomes non-zero, some reset envs sample a safe target
+    block and the hook is teleported in front of that block's push face.
+    """
+
+    cfg: "TargetBlockCommandCfg"
+
+    def __init__(self, cfg: "TargetBlockCommandCfg", env: ManagerBasedRlEnv):
+        super().__init__(cfg, env)
+        names, entries = _target_block_entries()
+        self._all_names = names
+        self._blocks = [env.scene[name] for name in names]
+        self._num_blocks = len(names)
+        self._env_arange = torch.arange(self.num_envs, device=self.device)
+
+        self._start_pos = torch.tensor(
+            [entry["start_pos"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._extraction = torch.tensor(
+            [entry["extraction_w"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._task_quat = torch.tensor(
+            [entry["task_quat"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._hook_home = torch.tensor(
+            [entry["hook_home"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._neighbor_idx = torch.tensor(
+            [entry["neighbors"] for entry in entries],
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        name_to_idx = {name: idx for idx, name in enumerate(names)}
+        self._fixed_idx = name_to_idx[cfg.fixed_target_name]
+        selectable = [
+            name_to_idx[name]
+            for name in cfg.selectable_target_names
+            if name in name_to_idx and name not in MISSING_BLOCK_CANDIDATES
+        ]
+        self._selectable = torch.tensor(selectable, dtype=torch.long, device=self.device)
+        self._num_selectable = int(self._selectable.numel())
+        if self._num_selectable == 0:
+            raise ValueError("TargetBlockCommand needs at least one selectable block.")
+
+        hook = env.scene["hook"]
+        hook_joint_ids, _ = hook.find_joints(
+            ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw"),
+            preserve_order=True,
+        )
+        self._hook = hook
+        self._hook_joint_ids = torch.tensor(
+            hook_joint_ids,
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        self.selected_block_idx = torch.full(
+            (self.num_envs,),
+            self._fixed_idx,
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.selected_is_random = torch.zeros(
+            self.num_envs,
+            dtype=torch.bool,
+            device=self.device,
+        )
+        self._cur_target_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self._cur_target_vel = torch.zeros(self.num_envs, 3, device=self.device)
+        self._cur_target_pose = torch.zeros(self.num_envs, 7, device=self.device)
+        self._cur_ref_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self._cur_movement_rel = torch.zeros(self.num_envs, 3, device=self.device)
+        self._cur_progress = torch.zeros(self.num_envs, device=self.device)
+        self._cur_tower_shift = torch.zeros(self.num_envs, device=self.device)
+
+        self.metrics["selected_block"] = self.selected_block_idx.float()
+        self.metrics["random_target"] = self.selected_is_random.float()
+        self.metrics["progress"] = self._cur_progress
+
+    @property
+    def command(self) -> torch.Tensor:
+        return self.selected_extraction_w()
+
+    @staticmethod
+    def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        weights = mask.to(values.dtype).unsqueeze(-1)
+        count = weights.sum(dim=1)
+        mean = (values * weights).sum(dim=1) / count.clamp_min(1.0)
+        return torch.where(count > 0, mean, torch.zeros_like(mean))
+
+    def _present_by_block(self) -> torch.Tensor:
+        present = torch.ones(
+            self.num_envs,
+            self._num_blocks,
+            dtype=torch.bool,
+            device=self.device,
+        )
+        for block_idx, block_name in enumerate(self._all_names):
+            present[:, block_idx] = ~current_missing_block_mask(self._env, block_name)
+        return present
+
+    def selected_target_pos_w(self) -> torch.Tensor:
+        return self._cur_target_pos
+
+    def selected_target_vel_w(self) -> torch.Tensor:
+        return self._cur_target_vel
+
+    def selected_target_pose_w(self) -> torch.Tensor:
+        return self._cur_target_pose
+
+    def selected_ref_pos_w(self) -> torch.Tensor:
+        return self._cur_ref_pos
+
+    def selected_relative_movement(self) -> torch.Tensor:
+        return self._cur_movement_rel
+
+    def selected_progress(self) -> torch.Tensor:
+        return self._cur_progress
+
+    def selected_tower_shift(self) -> torch.Tensor:
+        return self._cur_tower_shift
+
+    def selected_extraction_w(self) -> torch.Tensor:
+        return self._extraction[self.selected_block_idx]
+
+    def selected_hook_home(self) -> torch.Tensor:
+        return self._hook_home[self.selected_block_idx]
+
+    def selected_task_quat_w(self) -> torch.Tensor:
+        return self._task_quat[self.selected_block_idx]
+
+    def _update_metrics(self) -> None:
+        all_pos = torch.stack(
+            [block.data.body_link_pos_w[:, 0, :] for block in self._blocks],
+            dim=0,
+        )
+        all_vel = torch.stack(
+            [block.data.body_link_vel_w[:, 0, :] for block in self._blocks],
+            dim=0,
+        )
+        all_pose = torch.stack(
+            [block.data.body_link_pose_w[:, 0, :] for block in self._blocks],
+            dim=0,
+        )
+        selected = self.selected_block_idx
+        env_ids = self._env_arange
+        self._cur_target_pos = all_pos[selected, env_ids]
+        self._cur_target_vel = all_vel[selected, env_ids]
+        self._cur_target_pose = all_pose[selected, env_ids]
+
+        neighbor_idx = self._neighbor_idx[selected]
+        present_by_block = self._present_by_block()
+        neighbor_present = present_by_block[env_ids.unsqueeze(1), neighbor_idx]
+        neighbor_pos = all_pos[neighbor_idx, env_ids.unsqueeze(1)]
+        neighbor_start = self._start_pos[neighbor_idx]
+        ref_pos = self._masked_mean(neighbor_pos, neighbor_present)
+        start_ref_pos = self._masked_mean(neighbor_start, neighbor_present)
+        start_target_rel = self._start_pos[selected] - start_ref_pos
+
+        self._cur_ref_pos = ref_pos
+        self._cur_movement_rel = (self._cur_target_pos - ref_pos) - start_target_rel
+        self._cur_progress = torch.sum(
+            self._cur_movement_rel * self.selected_extraction_w(),
+            dim=-1,
+        )
+
+        present_for_com = present_by_block.clone()
+        present_for_com[env_ids, selected] = False
+        weights = present_for_com.to(all_pos.dtype).transpose(0, 1).unsqueeze(-1)
+        current_com = (all_pos * weights).sum(dim=0) / weights.sum(dim=0).clamp_min(1.0)
+        start_weights = present_for_com.to(self._start_pos.dtype).unsqueeze(-1)
+        start_com = (
+            self._start_pos.unsqueeze(0) * start_weights
+        ).sum(dim=1) / start_weights.sum(dim=1).clamp_min(1.0)
+        self._cur_tower_shift = torch.norm((current_com - start_com)[:, :2], dim=-1)
+
+        self.metrics["selected_block"] = selected.float()
+        self.metrics["random_target"] = self.selected_is_random.float()
+        self.metrics["progress"] = self._cur_progress
+
+    def _resample_command(self, env_ids: torch.Tensor) -> None:
+        num_resets = len(env_ids)
+        if num_resets == 0:
+            return
+
+        random_probability = random_target_block_scale(self._env)
+        use_random = torch.rand(num_resets, device=self.device) < random_probability
+        selected = torch.full(
+            (num_resets,),
+            self._fixed_idx,
+            dtype=torch.long,
+            device=self.device,
+        )
+        if torch.any(use_random):
+            random_choices = torch.randint(
+                0,
+                self._num_selectable,
+                (int(use_random.sum().item()),),
+                device=self.device,
+            )
+            selected[use_random] = self._selectable[random_choices]
+
+        self.selected_block_idx[env_ids] = selected
+        self.selected_is_random[env_ids] = use_random
+
+        if torch.any(use_random):
+            random_env_ids = env_ids[use_random]
+            target = self._hook_home[selected[use_random]].clone()
+            target[:, :3] += torch.empty_like(target[:, :3]).uniform_(-0.002, 0.002)
+            target[:, 3] += torch.empty(
+                target.shape[0],
+                device=self.device,
+                dtype=target.dtype,
+            ).uniform_(-0.02, 0.02)
+            self._hook.write_joint_position_to_sim(
+                target,
+                joint_ids=self._hook_joint_ids,
+                env_ids=random_env_ids,
+            )
+            self._hook.write_joint_velocity_to_sim(
+                torch.zeros(
+                    target.shape[0],
+                    self._hook_joint_ids.numel(),
+                    device=self.device,
+                ),
+                joint_ids=self._hook_joint_ids,
+                env_ids=random_env_ids,
+            )
+
+    def _update_command(self) -> None:
+        pass
+
+
+@dataclass(kw_only=True)
+class TargetBlockCommandCfg(CommandTermCfg):
+    fixed_target_name: str = FIXED_TARGET_BLOCK_NAME
+    selectable_target_names: tuple[str, ...] = RANDOM_TARGET_BLOCK_NAMES
+
+    def build(self, env: ManagerBasedRlEnv) -> TargetBlockCommand:
+        return TargetBlockCommand(self, env)
+
+
+def _target_command_or_none(env: ManagerBasedRlEnv) -> TargetBlockCommand | None:
+    command_manager = getattr(env, "command_manager", None)
+    if command_manager is None:
+        return None
+    try:
+        return command_manager.get_term("target_block")
+    except Exception:
+        return None
+
+
 def missing_block_randomization_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Probability that a reset uses a non-empty missing-block pattern."""
     progress = min(
@@ -287,10 +646,10 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <worldbody>
     <body name="hook" pos="0 0 0">
-      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.18 0.02" limited="true" damping="2"/>
-      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.075 0.075" limited="true" damping="2"/>
-      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.015 0.015" limited="true" damping="2"/>
-      <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 60" limited="true" damping="2"/>
+      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.22 0.16" limited="true" damping="2"/>
+      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.13 0.23" limited="true" damping="2"/>
+      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.17 0.13" limited="true" damping="2"/>
+      <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 150" limited="true" damping="2"/>
 
       <geom type="box"
             size="0.04 0.005 0.006"
@@ -311,9 +670,9 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <actuator>
     <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>    
-    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.075 0.075" kp="50"/>
-    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.015 0.015" kp="100"/>
-    <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
+    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.13 0.23" kp="50"/>
+    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.17 0.13" kp="50"/>
+    <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1.1 2.7" kp="20"/>
   </actuator>
 </mujoco>
 """
@@ -420,11 +779,19 @@ def all_block_pos(env):
 
 #custom reward functions for the position/velocity of the target block position
 def target_block_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_target_pos_w()
+
     asset: Entity = env.scene[asset_cfg.name]
     position = asset.data.body_link_pos_w[:, asset_cfg.body_ids, :]
     return position.squeeze(1)
 
 def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_target_vel_w()
+
     asset: Entity = env.scene[asset_cfg.name]
     velocity = asset.data.body_link_vel_w[:, asset_cfg.body_ids, :]
     return velocity.squeeze(1)
@@ -520,6 +887,10 @@ def tower_com_shift(
     """
     Computes the horizontal shift of the COM of the Tower.
     """
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_tower_shift()
+
     current = get_com_tower(env, asset_cfg)
     start = initial_tower_com_for_current_missing_pattern(env, asset_cfg)
     movement = current - start
@@ -532,6 +903,11 @@ def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TAR
     """
     extracts quaternion and position of block
     """
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        pose = cmd.selected_target_pose_w()
+        return pose[:, :3], pose[:, 3:7]
+
     asset: Entity = env.scene[asset_cfg.name]
     pose = asset.data.body_link_pose_w[:, asset_cfg.body_ids, :]
     pose = pose.squeeze(1)
@@ -586,11 +962,17 @@ YAW_CURRICULUM_BEGIN_STEP = 20_000
 YAW_CURRICULUM_STEPS = 80_000
 YAW_TARGET_LIMIT = 1.0
 ACTION_CLIP = 1.0
+HOOK_SLIDE_Y_TARGET_RANGE = (-0.13, 0.23)
+HOOK_SLIDE_Z_TARGET_RANGE = (-0.17, 0.13)
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
 ) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_relative_movement()
+
     ref_pos = get_block_ref_pos(env)
     target_pos = target_block_pos(env, asset_cfg)
 
@@ -599,6 +981,10 @@ def target_block_relative_movement(
 
 
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_progress()
+
     movement_rel = target_block_relative_movement(env, asset_cfg)
 
     extraction_direction = torch.tensor(
@@ -734,15 +1120,23 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         else:
             missing_env_count = int(torch.any(missing_mask, dim=1).sum().item())
             missing_block_count = int(missing_mask.sum().item())
+        cmd = _target_command_or_none(env)
+        if cmd is None:
+            random_target_env_count = 0
+            selected_block_mean = 0.0
+        else:
+            random_target_env_count = int(cmd.selected_is_random.sum().item())
+            selected_block_mean = cmd.selected_block_idx.float().mean().item()
         best_env = int(torch.argmax(progress).item())
         worst_env = int(torch.argmin(progress).item())
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f})",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f}, random_target={random_target_block_scale(env).item():.3f})",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
             f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
+            f"target(random_envs={random_target_env_count}/{env.num_envs}, selected_idx_mean={selected_block_mean:.2f})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
@@ -793,6 +1187,10 @@ class DeltaBlockProgressReward:
 
 
 def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None:
+        return cmd.selected_ref_pos_w()
+
     ref1_block_pos = target_block_pos(env, _REF_BLOCK_1_CFG)
     ref2_block_pos = target_block_pos(env, _REF_BLOCK_2_CFG)
     ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
@@ -874,8 +1272,16 @@ def block_contact_to_hook_yz_targets(
     target_y = current_y + (contact_world[:, 1] - hook_tip_world[:, 1])
     target_z = current_z + (contact_world[:, 2] - hook_tip_world[:, 2])
 
-    target_y = torch.clamp(target_y, -CONTACT_Y_LIMIT, CONTACT_Y_LIMIT)
-    target_z = torch.clamp(target_z, -CONTACT_Z_LIMIT, CONTACT_Z_LIMIT)
+    target_y = torch.clamp(
+        target_y,
+        HOOK_SLIDE_Y_TARGET_RANGE[0],
+        HOOK_SLIDE_Y_TARGET_RANGE[1],
+    )
+    target_z = torch.clamp(
+        target_z,
+        HOOK_SLIDE_Z_TARGET_RANGE[0],
+        HOOK_SLIDE_Z_TARGET_RANGE[1],
+    )
 
     return torch.stack([target_y, target_z], dim=-1)
 
@@ -988,6 +1394,16 @@ class CurriculumYawAction(ActionTerm):
 
         joint_pos = self._entity.data.joint_pos[:, self._target_ids]
         delta_yaw = self._raw_actions * self.cfg.scale * yaw_curriculum_scale(self._env)
+        cmd = _target_command_or_none(self._env)
+        if cmd is not None:
+            home_yaw = cmd.selected_hook_home()[:, 3:4]
+            self._processed_targets = torch.clamp(
+                joint_pos + delta_yaw,
+                home_yaw - YAW_TARGET_LIMIT,
+                home_yaw + YAW_TARGET_LIMIT,
+            )
+            return
+
         self._processed_targets = torch.clamp(
             joint_pos + delta_yaw,
             -YAW_TARGET_LIMIT,
@@ -1178,6 +1594,12 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
     }
 
+    commands = {
+        "target_block": TargetBlockCommandCfg(
+            resampling_time_range=(1.0e9, 1.0e9),
+        ),
+    }
+
 
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
@@ -1193,6 +1615,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         rewards=rewards,
         metrics=metrics,
         terminations=terminations,
+        commands=commands,
         viewer=ViewerConfig(
             origin_type=ViewerConfig.OriginType.WORLD,
             distance=1.0,
