@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -7,6 +8,7 @@ import mujoco
 import torch
 import math
 
+from mjlab.utils.lab_api.math import quat_apply_inverse, quat_apply
 from mjlab.terrains import TerrainEntityCfg
 from mjlab.actuator.xml_actuator import XmlActuatorCfg
 from mjlab.entity import Entity, EntityArticulationInfoCfg, EntityCfg
@@ -19,10 +21,11 @@ from mjlab.envs.mdp import (
 )
 from mjlab.envs.mdp.actions import (
     JointEffortActionCfg,
+    JointVelocityActionCfg,
     RelativeJointPositionActionCfg,
 )
 from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
-from mjlab.managers.action_manager import ActionTermCfg
+from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.observation_manager import (
   ObservationGroupCfg,
@@ -31,8 +34,7 @@ from mjlab.managers.observation_manager import (
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
-from mjlab.managers.curriculum_manager import CurriculumTermCfg
-from mjlab.envs.mdp.curriculums import reward_curriculum, termination_curriculum
+from mjlab.managers.metrics_manager import MetricsTermCfg
 from mjlab.rl import (
   RslRlModelCfg,
   RslRlOnPolicyRunnerCfg,
@@ -52,6 +54,10 @@ BLOCKS_PER_LAYER = 3
 
 BLOCK_SIZE = (0.05, 0.15, 0.03)
 BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
+CONTACT_X_LIMIT = 0.01
+CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
+CONTACT_Z_LIMIT = 0.006
+CONTACT_FACE_Y = -CONTACT_Y_LIMIT
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
@@ -70,10 +76,15 @@ _HOOK3_CFG = SceneEntityCfg("jenga", joint_names=("hook_slide3",))
 _HOOK_Y_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_y",))
 _HOOK_Z_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_z",))
 _TARGET_BLOCK_CFG = SceneEntityCfg("b6_1", body_names=("b6_1",))
-_REF_BLOCKS_CFG = SceneEntityCfg(
-    "jenga",
-    body_names=("b6_2", "b6_3"),
+_REF_BLOCK_1_CFG = SceneEntityCfg("b6_2", body_names=("b6_2",))
+_REF_BLOCK_2_CFG = SceneEntityCfg("b6_3", body_names=("b6_3",))
+_HOOK_YAW_CFG = SceneEntityCfg("hook", joint_names=("hook_yaw",))
+_HOOK_ALL_CFG = SceneEntityCfg(
+    "hook",
+    joint_names=("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw"),
 )
+_HOOK_TIP_CFG = SceneEntityCfg("hook", site_names=("hook_tip",))
+
 
 
 #block entities
@@ -98,14 +109,16 @@ def _get_block_infos():
 
             if layer % 2 == 1:
                 x_positions = [-SIDE_SPACING, 0, SIDE_SPACING]
-                x = x_positions[block - 1]
-                y = 0.0
-                quat = _quat_from_z_rotation_deg(0.0)
+                x = x_positions[block - 1] + rng.uniform(-0.0005, 0.0005)
+                y = 0.0 + rng.uniform(-0.0005, 0.0005)
+                yaw_noise = rng.uniform(-1.0, 1.0)
+                quat = _quat_from_z_rotation_deg(0.0 + yaw_noise)
             else:
                 y_positions = [SIDE_SPACING, 0, -SIDE_SPACING]
-                x = 0.0
-                y = y_positions[block - 1]
-                quat = _quat_from_z_rotation_deg(90.0)
+                x = 0.0 + rng.uniform(-0.0005, 0.0005)
+                y = y_positions[block - 1] + rng.uniform(-0.0005, 0.0005)
+                yaw_noise = rng.uniform(-1.0, 1.0)
+                quat = _quat_from_z_rotation_deg(90.0 + yaw_noise)
 
             if layer % 2 == 1:
                 color = COLOR_A if block in (1, 3) else COLOR_B
@@ -139,12 +152,13 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <worldbody>
     <body name="hook" pos="0 0 0">
-      <joint name="hook_slide" type="slide" axis="1 0 0" damping="2"/>
-      <joint name="hook_slide_y" type="slide" axis="0 1 0" damping="2"/>
-      <joint name="hook_slide_z" type="slide" axis="0 0 1" damping="2"/>
+      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.18 0.02" limited="true" damping="2"/>
+      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.075 0.075" limited="true" damping="2"/>
+      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.015 0.015" limited="true" damping="2"/>
+      <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 60" limited="true" damping="2"/>
 
       <geom type="box"
-            size="0.04 0.005 0.01"
+            size="0.04 0.005 0.006"
             pos="0 0 0"
             rgba="0.1 0.1 0.9 1"
             density="2000"
@@ -156,13 +170,15 @@ def _get_hook_spec() -> mujoco.MjSpec:
             pos="-0.05 0 0"
             rgba="1 0 0 1"
             density="2000"/>
+        <site name="hook_tip" pos="-0.056 0 0" size="0.003"/>
     </body>
   </worldbody>
 
   <actuator>
-    <motor name="hook_x_motor" joint="hook_slide" ctrlrange="-1 1" gear="5"/>
-    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.05 0.05" kp="50"/>
-    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.05 0.05" kp="50"/>
+    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>    
+    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.075 0.075" kp="50"/>
+    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.015 0.015" kp="100"/>
+    <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1 1" kp="20"/>
   </actuator>
 </mujoco>
 """
@@ -175,6 +191,7 @@ _HOOK_ARTICULATION = EntityArticulationInfoCfg(
         XmlActuatorCfg(target_names_expr=("hook_slide",)),
         XmlActuatorCfg(target_names_expr=("hook_slide_y",)),
         XmlActuatorCfg(target_names_expr=("hook_slide_z",)),
+        XmlActuatorCfg(target_names_expr=("hook_yaw",)),
     ),
 )
 
@@ -189,6 +206,7 @@ def _get_hook_cfg() -> EntityCfg:
                 "hook_slide": 0.0,
                 "hook_slide_y": 0.0,
                 "hook_slide_z": 0.0,
+                "hook_yaw": 0.0,
             },
             joint_vel={".*": 0.0},
         ),
@@ -243,6 +261,25 @@ def _build_entities() -> dict[str, EntityCfg]:
 
     return entities
 
+
+def make_all_block_cfgs():
+    all_block_cfgs = []
+    for block in _get_block_infos(): 
+        name = block["name"]
+        block_cfg = SceneEntityCfg(name, body_names=(name,))
+        all_block_cfgs.append(block_cfg)
+    return tuple(all_block_cfgs)
+
+_ALL_BLOCK_CFGS = make_all_block_cfgs() #get block configs (for position/velocity)
+
+def all_block_pos(env):
+    positions = []
+    for block_cfg in _ALL_BLOCK_CFGS:
+        pos = target_block_pos(env, block_cfg)
+        positions.append(pos)
+    return torch.cat(positions, dim=-1)
+
+
 # Observations
 
 
@@ -258,21 +295,148 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
     return velocity.squeeze(1)
 
 
+# get COM of the tower
+def get_com_per_block(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    """
+    get COM per block, expcept the target block. 
+    """
+    blocks = _get_block_infos()
+    block_com_all = []
+    target_block_name = asset_cfg.name
+    for block in blocks:
+        asset: Entity =env.scene[block["name"]]
+        if block["name"] != target_block_name:
+            block_com = asset.data.body_com_pos_w[:, 0, :]
+            block_com_all.append(block_com)
+        else:
+            continue
+    return torch.stack(block_com_all, dim=1)
+
+
+def get_com_tower(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    """
+    get the COM of the tower.
+    """
+    block_com = get_com_per_block(env, asset_cfg)
+    com_total_tower = torch.mean(block_com, dim=1)
+    return com_total_tower
+
+def initial_tower_com(
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """
+    Compute the initial tower COM from the initial block positions,
+    excluding the target block.
+    """
+    block_positions = []
+    target_block_name = asset_cfg.name
+
+    for block in _get_block_infos():
+        if block["name"] == target_block_name:
+            continue
+
+        block_positions.append(torch.tensor(block["pos"], dtype=torch.float32))
+
+    block_positions = torch.stack(block_positions, dim=0)
+    return torch.mean(block_positions, dim=0)
+
+
+_START_TOWER_COM  = initial_tower_com()
+
+
+def tower_com_shift(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """
+    Computes the horizontal shift of the COM of the Tower.
+    """
+    current = get_com_tower(env, asset_cfg)
+    movement = current - _START_TOWER_COM.to(current.device)
+    horizontal_shift = torch.norm(movement[:, :2], dim=-1)
+    return horizontal_shift
+
+
+#convert gripper to local coordinate frame of the block
+def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    """
+    extracts quaternion and position of block
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    pose = asset.data.body_link_pose_w[:, asset_cfg.body_ids, :]
+    pose = pose.squeeze(1)
+    block_pos = pose[:, :3]
+    block_quat = pose[:, 3:7]
+    return block_pos, block_quat
+
+
+def hook_tip_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _HOOK_TIP_CFG) -> torch.Tensor:
+    """
+    get the position of the gripper
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    hook_tip_position = asset.data.site_pos_w[:, asset_cfg.site_ids, :]
+    return hook_tip_position.squeeze(1)
+
+
+def hook_tip_pos_in_block_frame(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    """
+    Convert hook_tip_pos World coordinate system into a Block-local coordinate system.
+    """
+    block_pos_world, block_quat_world = target_block_pose(env, asset_cfg)
+    hook_tip_pos_world = hook_tip_pos(env)
+
+    position = hook_tip_pos_world - block_pos_world #vector from block_center to tip of the hook
+    hook_tip_pos_block  = quat_apply_inverse(block_quat_world, position)
+
+    return hook_tip_pos_block 
+
+
+def _initial_block_pos(block_name: str) -> torch.Tensor:
+    for block_info in _get_block_infos():
+        if block_info["name"] == block_name:
+            return torch.tensor(block_info["pos"])
+    raise ValueError(f"Unknown block name: {block_name}")
+
+
+_START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
+_START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
+PERTURBATION_CURRICULUM_START = 0.1
+PERTURBATION_CURRICULUM_STEPS = 100_000
+SUCCESS_CURRICULUM_START = 0.75
+SUCCESS_CURRICULUM_END = 0.75
+SUCCESS_CURRICULUM_STEPS = 1
+TOUCH_CURRICULUM_START = 1.0
+TOUCH_CURRICULUM_END = 1.0
+TOUCH_CURRICULUM_BEGIN_STEP = 0
+TOUCH_CURRICULUM_STEPS = 1
+YAW_CURRICULUM_START = 0.0
+YAW_CURRICULUM_END = 0.0
+YAW_CURRICULUM_BEGIN_STEP = 40000
+YAW_CURRICULUM_STEPS = 80_000
+YAW_TARGET_LIMIT = 1.0
+ACTION_CLIP = 1.0
 # Rewards
+def target_block_relative_movement(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    ref_pos = get_block_ref_pos(env)
+    target_pos = target_block_pos(env, asset_cfg)
 
+    current_rel = target_pos - ref_pos
+    return current_rel - _START_TARGET_REL_POS.to(current_rel.device)
 
-
-# get the block start position // TODO extract the start_pos with targe_block_pos() if the env is given
-# block_start_pos = target_block_pos()
-_START_BLOCK_POS = torch.tensor([0.0, 0.0505, 0.168])
 
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    block_current_pos = target_block_pos(env, asset_cfg)
-    device = block_current_pos.device
-    movement = block_current_pos - _START_BLOCK_POS.to(device)
+    movement_rel = target_block_relative_movement(env, asset_cfg)
 
-    extraction_direction = torch.tensor([-1.0, 0.0, 0.0], device=device)
-    progress = torch.sum(movement * extraction_direction, dim=-1)
+    extraction_direction = torch.tensor(
+        [-1.0, 0.0, 0.0],
+        device=movement_rel.device,
+    )
+    progress = torch.sum(movement_rel * extraction_direction, dim=-1)
+
     return progress
 
 # Fazeli's dx_t (b1 term): per-step positive displacement of the target block along
@@ -351,20 +515,409 @@ def tower_toppled(env: ManagerBasedRlEnv, threshold: float = 1e9) -> torch.Tenso
     return tower_perturbation(env) > threshold
 
 
+def tower_moderate_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_com_shift(env)
+
+
+def tower_large_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    shift = tower_com_shift(env)
+    return (shift > 0.02).float()
+
+
+def perturbation_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    progress = min(env.common_step_counter / PERTURBATION_CURRICULUM_STEPS, 1.0)
+    scale = PERTURBATION_CURRICULUM_START + (
+        1.0 - PERTURBATION_CURRICULUM_START
+    ) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def success_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    progress = min(env.common_step_counter / SUCCESS_CURRICULUM_STEPS, 1.0)
+    scale = SUCCESS_CURRICULUM_START + (
+        SUCCESS_CURRICULUM_END - SUCCESS_CURRICULUM_START
+    ) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def _linear_curriculum_scale(
+    env: ManagerBasedRlEnv,
+    start: float,
+    end: float,
+    begin_step: int,
+    steps: int,
+) -> torch.Tensor:
+    progress = min(max(env.common_step_counter - begin_step, 0) / steps, 1.0)
+    scale = start + (end - start) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def touch_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return _linear_curriculum_scale(
+        env,
+        TOUCH_CURRICULUM_START,
+        TOUCH_CURRICULUM_END,
+        TOUCH_CURRICULUM_BEGIN_STEP,
+        TOUCH_CURRICULUM_STEPS,
+    )
+
+
+def yaw_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return _linear_curriculum_scale(
+        env,
+        YAW_CURRICULUM_START,
+        YAW_CURRICULUM_END,
+        YAW_CURRICULUM_BEGIN_STEP,
+        YAW_CURRICULUM_STEPS,
+    )
+
+
+def success_done_distance(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return BLOCK_SIZE[1] * success_curriculum_scale(env)
+
+
+def progress_towards_success_distance_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Dense reward for being closer to the configured extraction success distance."""
+    progress = block_progress(env)
+    target = success_done_distance(env)
+    progress_fraction = torch.clamp(progress / target, 0.0, 1.0)
+    return progress_fraction ** 2
+
+
+def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
+
+
+def tower_large_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_large_perturbation(env) * perturbation_curriculum_scale(env)
+
+
+def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return torch.norm(env.action_manager.action, dim=-1)
+
+
+def hook_x_position(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _HOOK1_CFG,
+) -> torch.Tensor:
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids].squeeze(-1)
+
+
+def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
+    if env.common_step_counter % 500 == 0:
+        action = env.action_manager.action
+        hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
+        hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+        movement_rel = target_block_relative_movement(env)
+        progress = block_progress(env)
+        success = success_block_extract(env)
+        success_distance = success_done_distance(env)
+        tower_shift = tower_com_shift(env)
+        tower_large = tower_large_perturbation(env)
+        hook_x = hook_x_position(env)
+        hook_tip_block = hook_tip_pos_in_block_frame(env)
+        touch_raw = torch.clamp(action[:, 1:3], -ACTION_CLIP, ACTION_CLIP)
+        contact_block = torch.zeros(env.num_envs, 3, device=env.device)
+        contact_block[:, 0] = touch_raw[:, 0] * CONTACT_X_LIMIT * touch_curriculum_scale(env)
+        contact_block[:, 1] = CONTACT_FACE_Y
+        contact_block[:, 2] = touch_raw[:, 1] * CONTACT_Z_LIMIT * touch_curriculum_scale(env)
+        touch_target = block_contact_to_hook_yz_targets(env, contact_block)
+        block_pos_world, block_quat_world = target_block_pose(env)
+        contact_world = block_point_to_world(env, contact_block)
+        contact_roundtrip = quat_apply_inverse(
+            block_quat_world,
+            contact_world - block_pos_world,
+        )
+        roundtrip_error = contact_roundtrip - contact_block
+        tip_contact_error_block = hook_tip_block - contact_block
+        hook_x_joint = hook_joint_pos[:, 0]
+        best_env = int(torch.argmax(progress).item())
+        worst_env = int(torch.argmin(progress).item())
+        print(
+            "DEBUG_REWARD",
+            f"step={env.common_step_counter}",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f})",
+            f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
+            f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
+            f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs})",
+            f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
+            f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
+            f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
+            f"transform(roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f})",
+            f"hook(joint_x_mean={hook_x_joint.mean().item():.5f}, joint_x_minmax=({hook_x_joint.min().item():.5f},{hook_x_joint.max().item():.5f}), hook_x_mean={hook_x.mean().item():.5f}, hook_x_minmax=({hook_x.min().item():.5f},{hook_x.max().item():.5f}), joint_yz=({hook_joint_pos[:, 1].mean().item():.5f},{hook_joint_pos[:, 2].mean().item():.5f}), joint_yaw={hook_joint_pos[:, 3].mean().item():.5f})",
+            f"env_compare(best={best_env}:progress={progress[best_env].item():.5f},hook_x={hook_x_joint[best_env].item():.5f},act_x={action[best_env, 0].item():.5f}; worst={worst_env}:progress={progress[worst_env].item():.5f},hook_x={hook_x_joint[worst_env].item():.5f},act_x={action[worst_env, 0].item():.5f})",
+            flush=True,
+        )
+    return torch.zeros(env.num_envs, device=env.device)
+
+
+class DeltaBlockProgressReward:
+    """Reward only new extraction progress since the previous environment step."""
+
+    def __init__(self, asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG):
+        self.asset_cfg = asset_cfg
+        self.previous_progress: torch.Tensor | None = None
+        self.needs_init: torch.Tensor | None = None
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        current_progress = block_progress(env, self.asset_cfg)
+
+        if self.previous_progress is None:
+            self.previous_progress = current_progress.clone()
+            self.needs_init = torch.zeros_like(current_progress, dtype=torch.bool)
+            return torch.zeros_like(current_progress)
+
+        if self.needs_init is not None and torch.any(self.needs_init):
+            self.previous_progress[self.needs_init] = current_progress[self.needs_init]
+            self.needs_init[self.needs_init] = False
+
+        delta_progress = current_progress - self.previous_progress
+        self.previous_progress = current_progress.clone()
+
+        return torch.clamp(delta_progress, min=0.0)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if self.previous_progress is None:
+            return
+
+        if self.needs_init is None:
+            self.needs_init = torch.zeros_like(self.previous_progress, dtype=torch.bool)
+
+        if env_ids is None:
+            env_ids = slice(None)
+        self.needs_init[env_ids] = True
+
+
+
+def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
+    ref1_block_pos = target_block_pos(env, _REF_BLOCK_1_CFG)
+    ref2_block_pos = target_block_pos(env, _REF_BLOCK_2_CFG)
+    ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
+    return ref_block_state_mean
+
+def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
+    progress = block_progress(env)
+    return progress > success_done_distance(env)
+
+
+def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
+    return success_block_extract(env).float()
+
+
+def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
+    ref_pos = get_block_ref_pos(env)
+    movement = ref_pos - _START_REF_POS.to(ref_pos.device)
+    horizontal_movement = torch.norm(movement[:, :2], dim=-1)
+    return horizontal_movement > 0.06
+
+
+def block_vector_to_world(
+    env: ManagerBasedRlEnv,
+    vector_block: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """Rotate a vector from the target block frame into the world frame."""
+    _, block_quat_world = target_block_pose(env, asset_cfg)
+    vector_block = vector_block.to(
+        device=block_quat_world.device,
+        dtype=block_quat_world.dtype,
+    )
+    if vector_block.ndim == 1:
+        vector_block = vector_block.unsqueeze(0).repeat(env.num_envs, 1)
+    return quat_apply(block_quat_world, vector_block)
+
+
+def block_point_to_world(
+    env: ManagerBasedRlEnv,
+    point_block: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """Transform a point from the target block frame into the world frame."""
+    block_pos_world, _ = target_block_pose(env, asset_cfg)
+    return block_pos_world + block_vector_to_world(env, point_block, asset_cfg)
+
+
+def block_contact_to_hook_yz_targets(
+    env: ManagerBasedRlEnv,
+    contact_block: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    contact_block = contact_block.clone()
+    contact_block[:, 0] = torch.clamp(
+        contact_block[:, 0],
+        -CONTACT_X_LIMIT,
+        CONTACT_X_LIMIT,
+    )
+    contact_block[:, 1] = torch.clamp(
+        contact_block[:, 1],
+        -CONTACT_Y_LIMIT,
+        CONTACT_Y_LIMIT,
+    )
+    contact_block[:, 2] = torch.clamp(
+        contact_block[:, 2],
+        -CONTACT_Z_LIMIT,
+        CONTACT_Z_LIMIT,
+    )
+
+    contact_world = block_point_to_world(env, contact_block, asset_cfg)
+    hook_tip_world = hook_tip_pos(env)
+
+    hook_asset = env.scene[_HOOK_ALL_CFG.name]
+    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+
+    current_y = hook_joint_pos[:, 1]
+    current_z = hook_joint_pos[:, 2]
+
+    target_y = current_y + (contact_world[:, 1] - hook_tip_world[:, 1])
+    target_z = current_z + (contact_world[:, 2] - hook_tip_world[:, 2])
+
+    target_y = torch.clamp(target_y, -CONTACT_Y_LIMIT, CONTACT_Y_LIMIT)
+    target_z = torch.clamp(target_z, -CONTACT_Z_LIMIT, CONTACT_Z_LIMIT)
+
+    return torch.stack([target_y, target_z], dim=-1)
+
+
+@dataclass(kw_only=True)
+class BlockLocalHookYZActionCfg(ActionTermCfg):
+    """Choose a contact point on the target block face."""
+
+    scale: tuple[float, float] = (CONTACT_X_LIMIT, CONTACT_Z_LIMIT)
+    contact_y: float = CONTACT_FACE_Y
+    asset_cfg: SceneEntityCfg = field(
+        default_factory=lambda: SceneEntityCfg("b6_1", body_names=("b6_1",))
+    )
+
+    def build(self, env: ManagerBasedRlEnv) -> BlockLocalHookYZAction:
+        return BlockLocalHookYZAction(self, env)
+
+
+class BlockLocalHookYZAction(ActionTerm):
+    """Policy action [y_block, z_block] -> hook_slide_y/z position targets."""
+
+    cfg: BlockLocalHookYZActionCfg
+
+    def __init__(self, cfg: BlockLocalHookYZActionCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg=cfg, env=env)
+        joint_ids, joint_names = self._entity.find_joints(
+            ("hook_slide_y", "hook_slide_z"),
+            preserve_order=True,
+        )
+        self._target_ids = torch.tensor(joint_ids, device=self.device, dtype=torch.long)
+        self._target_names = joint_names
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._processed_targets = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._contact_block = torch.zeros(self.num_envs, 3, device=self.device)
+        self._scale = torch.tensor(cfg.scale, device=self.device).view(1, 2)
+
+    @property
+    def action_dim(self) -> int:
+        return 2
+
+    @property
+    def raw_action(self) -> torch.Tensor:
+        return self._raw_actions
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        self._raw_actions[:] = torch.clamp(actions, -ACTION_CLIP, ACTION_CLIP)
+
+        contact_block = torch.zeros(self.num_envs, 3, device=self.device)
+        scaled_actions = self._raw_actions * self._scale * touch_curriculum_scale(self._env)
+        contact_block[:, 0] = scaled_actions[:, 0]
+        contact_block[:, 1] = self.cfg.contact_y
+        contact_block[:, 2] = scaled_actions[:, 1]
+        self._contact_block[:] = contact_block
+
+        self._processed_targets = block_contact_to_hook_yz_targets(
+            self._env,
+            contact_block,
+            self.cfg.asset_cfg,
+        )
+
+    def apply_actions(self) -> None:
+        self._entity.set_joint_position_target(
+            self._processed_targets,
+            joint_ids=self._target_ids,
+        )
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self._processed_targets[env_ids] = 0.0
+
+
+
+
+@dataclass(kw_only=True)
+class CurriculumYawActionCfg(ActionTermCfg):
+    """Relative yaw target whose effective scale ramps up during training."""
+
+    scale: float = 0.05
+
+    def build(self, env: ManagerBasedRlEnv) -> CurriculumYawAction:
+        return CurriculumYawAction(self, env)
+
+
+class CurriculumYawAction(ActionTerm):
+    cfg: CurriculumYawActionCfg
+
+    def __init__(self, cfg: CurriculumYawActionCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg=cfg, env=env)
+        joint_ids, joint_names = self._entity.find_joints(
+            ("hook_yaw",),
+            preserve_order=True,
+        )
+        self._target_ids = torch.tensor(joint_ids, device=self.device, dtype=torch.long)
+        self._target_names = joint_names
+        self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self._processed_targets = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
+    @property
+    def raw_action(self) -> torch.Tensor:
+        return self._raw_actions
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        self._raw_actions[:] = torch.clamp(actions, -ACTION_CLIP, ACTION_CLIP)
+
+        joint_pos = self._entity.data.joint_pos[:, self._target_ids]
+        delta_yaw = self._raw_actions * self.cfg.scale * yaw_curriculum_scale(self._env)
+        self._processed_targets = torch.clamp(
+            joint_pos + delta_yaw,
+            -YAW_TARGET_LIMIT,
+            YAW_TARGET_LIMIT,
+        )
+
+    def apply_actions(self) -> None:
+        self._entity.set_joint_position_target(
+            self._processed_targets,
+            joint_ids=self._target_ids,
+        )
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self._processed_targets[env_ids] = 0.0
+
 
 # Environment conifg
 
 
 def _make_env_cfg() -> ManagerBasedRlEnvCfg:
-
+#observations actor + critic
     actor_terms = {
         "pusher_pos": ObservationTermCfg(
             func=joint_pos_rel,
-            params={"asset_cfg": _HOOK1_CFG}
+            params={"asset_cfg": _HOOK_ALL_CFG}
         ),
         "pusher_vel": ObservationTermCfg(
             func=joint_vel_rel,
-            params={"asset_cfg": _HOOK1_CFG}
+            params={"asset_cfg": _HOOK_ALL_CFG}
         ),
         "block_pos": ObservationTermCfg(
             func=target_block_pos,
@@ -380,29 +933,43 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
     }
 
+    critic_terms = {
+        **actor_terms,
+        "block_all_pos": ObservationTermCfg(
+            func=all_block_pos,
+        ),
+        "hook_tip_block_local_position": ObservationTermCfg(
+            func=hook_tip_pos_in_block_frame
+        ),
+        #"block_all_vel": ObservationTermCfg(
+         #   func=target_block_vel,
+          #  params={"asset_cfg": _ALL_BLOCK_CFGS},
+        #),
+    }
+
 
     observations = {
         "actor": ObservationGroupCfg(actor_terms, enable_corruption=True),
-        "critic": ObservationGroupCfg({**actor_terms}),
+        "critic": ObservationGroupCfg(critic_terms),
     }
 
 
     #TODO Maybe swap effort (aka force) for velocity
     actions : dict[str, ActionTermCfg] = {
-        "effort": JointEffortActionCfg(
+        "x_velocity": JointVelocityActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide",),
-            scale=1.0,
+            scale=0.05,
+            clip={"hook_slide": (-0.6, 0.6)},
         ),
-        "touch_y": RelativeJointPositionActionCfg(
+        "block_local_touch": BlockLocalHookYZActionCfg( #yields 2 actions
             entity_name="hook",
-            actuator_names=("hook_slide_y",),
-            scale=1.0,
+            scale=(CONTACT_X_LIMIT, CONTACT_Z_LIMIT),
+            asset_cfg=_TARGET_BLOCK_CFG,
         ),
-        "touch_z": RelativeJointPositionActionCfg(
+        "yaw" : CurriculumYawActionCfg(
             entity_name="hook",
-            actuator_names=("hook_slide_z",),
-            scale=1.0,
+            scale=0.05,
         ),
     }
 
@@ -440,41 +1007,76 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
 
     rewards = {
-        # Fazeli b1*dx_t: accumulating positive displacement along the block's major axis.
-        "block_dx": RewardTermCfg(
-            func=block_dx,
-            weight=0.1,   # b1
+        "delta_block_progress": RewardTermCfg(
+            func=DeltaBlockProgressReward(),
+            weight=40.0,
         ),
-        # Fazeli's reward has NO control-effort term. Kept (weight 0) so it can be
-        # re-enabled later without re-adding the plumbing.
-        "torque_penalty": RewardTermCfg(
-            func=joint_torques_l2,
-            weight=0.0,
-            params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
+        # "progress_towards_success_distance": RewardTermCfg(
+        #     func=progress_towards_success_distance_reward,
+        #     weight=2.0,
+        # ),
+        # "torque_penalty": RewardTermCfg(
+        #     func=joint_torques_l2,
+        #     weight=-0.01,
+        #     params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
+        # ),
+        # "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
+        #     func=action_rate_l2,
+        #     weight=-0.001,
+        # ),
+        "successful_extract": RewardTermCfg(
+            func=success_block_reward,
+            weight=900.0,
         ),
-        "action_rate": RewardTermCfg( #kept (weight 0) for later phases, off for Phase 1
-            func=action_rate_l2,
-            weight=0.0,
+        "tower_moderate_pertub" : RewardTermCfg(
+            func=tower_moderate_perturbation_curriculum,
+            weight=-0.2
         ),
-        # Fazeli b4*D3: terminal-style bonus once the block is ~3/4 extracted.
-        "extraction_success": RewardTermCfg(
-            func=extraction_success,
-            weight=4.0,   # b4
+        "tower_large_pertub" : RewardTermCfg(
+            func=tower_large_perturbation_curriculum,
+            weight=-100.0
         ),
-        # Fazeli -b2*D1: moderate tower-perturbation penalty. Ramped 0 -> -0.2 by the
-        # curriculum (learn to push first, then care about stability).
-        "perturb_moderate": RewardTermCfg(
-            func=perturb_moderate,
-            weight=0.0,
+        "debug_reward_signals": RewardTermCfg(
+            func=debug_reward_signals,
+            weight=1e-12,
         ),
-        # Fazeli -b3*D2: large perturbation / near-collapse penalty. Ramped 0 -> -100.
-        "perturb_large": RewardTermCfg(
-            func=perturb_large,
-            weight=0.0,
+    }
+
+    metrics = {
+        "block_progress_last": MetricsTermCfg(
+            func=block_progress,
+            reduce="last",
+        ),
+        "delta_block_progress_mean": MetricsTermCfg(
+            func=DeltaBlockProgressReward(),
+            reduce="mean",
+        ),
+        "success_last": MetricsTermCfg(
+            func=success_block_reward,
+            reduce="last",
+        ),
+        "tower_com_shift_last": MetricsTermCfg(
+            func=tower_com_shift,
+            reduce="last",
+        ),
+        "tower_large_perturb_mean": MetricsTermCfg(
+            func=tower_large_perturbation,
+            reduce="mean",
+        ),
+        "action_norm_mean": MetricsTermCfg(
+            func=action_norm,
+            reduce="mean",
+        ),
+        "hook_x_position_last": MetricsTermCfg(
+            func=hook_x_position,
+            params={"asset_cfg": _HOOK1_CFG},
+            reduce="last",
         ),
     }
 
     terminations = {
+        "success": TerminationTermCfg(func=success_block_extract),
+        #"tower_damage": TerminationTermCfg(func=tower_damage),
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
         # Fazeli: a run ends on tower topple. True termination (not truncation).
         # threshold starts ~inf (never fires) and is ramped to 0.4 by the curriculum.
@@ -485,49 +1087,20 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
     }
 
-    # Phase 2 warmup schedule (common_step_counter = iterations * num_steps_per_env(32)):
-    # push-only until ~iter 300, full Fazeli stability gains by ~iter 500.
-    _WARMUP = 300 * 32   #  9600
-    _FULL   = 500 * 32   # 16000
-    curriculum = {
-        "perturb_moderate_w": CurriculumTermCfg(
-            func=reward_curriculum,
-            params={"reward_name": "perturb_moderate", "stages": [
-                {"step": 0,        "weight": 0.0},
-                {"step": _WARMUP,  "weight": -0.1},
-                {"step": _FULL,    "weight": -0.2},   # b2
-            ]},
-        ),
-        "perturb_large_w": CurriculumTermCfg(
-            func=reward_curriculum,
-            params={"reward_name": "perturb_large", "stages": [
-                {"step": 0,        "weight": 0.0},
-                {"step": _WARMUP,  "weight": -100.0},  # b3
-            ]},
-        ),
-        "topple_threshold": CurriculumTermCfg(
-            func=termination_curriculum,
-            params={"termination_name": "topple", "stages": [
-                {"step": 0,        "params": {"threshold": 1e9}},
-                {"step": _WARMUP,  "params": {"threshold": 0.4}},
-            ]},
-        ),
-    }
-
-
     return ManagerBasedRlEnvCfg(
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
-            num_envs=1,
+            num_envs=256,
             env_spacing=4.0,
         ),
+        #scale_rewards_by_dt=False,
         observations=observations,
         actions=actions,
         events=events,
         rewards=rewards,
+        metrics=metrics,
         terminations=terminations,
-        curriculum=curriculum,
         viewer=ViewerConfig(
             origin_type=ViewerConfig.OriginType.WORLD,
             distance=1.0,
@@ -588,9 +1161,9 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       max_grad_norm=1.0,
     ),
     experiment_name="jenga",
-    save_interval=50,
+    save_interval=500,
     num_steps_per_env=32,
-    max_iterations=500,
+    max_iterations=2000,
   )
 
 
