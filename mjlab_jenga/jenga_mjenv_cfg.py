@@ -77,6 +77,8 @@ MISSING_BLOCK_PARK_SPACING = 0.2
 RANDOM_TARGET_BLOCK_BEGIN_STEP = 320_000
 RANDOM_TARGET_BLOCK_RAMP_STEPS = 120_000
 RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.50
+RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 440_000
+RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 120_000
 FIXED_TARGET_BLOCK_NAME = "b6_1"
 RANDOM_TARGET_BLOCK_NAMES = (
     "b1_1",
@@ -217,6 +219,18 @@ def random_target_block_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
         min(progress, 1.0) * RANDOM_TARGET_BLOCK_END_PROBABILITY,
         device=env.device,
     )
+
+
+def random_target_with_missing_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Probability that random targets are allowed in already incomplete towers."""
+    progress = (
+        max(
+            env.common_step_counter - RANDOM_TARGET_WITH_MISSING_BEGIN_STEP,
+            0,
+        )
+        / RANDOM_TARGET_WITH_MISSING_RAMP_STEPS
+    )
+    return torch.tensor(min(progress, 1.0), device=env.device)
 
 
 def _rz_quat(angle_rad: float) -> tuple[float, float, float, float]:
@@ -475,6 +489,13 @@ class TargetBlockCommand(CommandTerm):
 
         random_probability = random_target_block_scale(self._env)
         use_random = torch.rand(num_resets, device=self.device) < random_probability
+        present_by_block = self._present_by_block()
+        envs_without_missing = present_by_block[env_ids].all(dim=1)
+        allow_random_with_missing = (
+            torch.rand(num_resets, device=self.device)
+            < random_target_with_missing_scale(self._env)
+        )
+        use_random &= envs_without_missing | allow_random_with_missing
         selected = torch.full(
             (num_resets,),
             self._fixed_idx,
@@ -1123,20 +1144,27 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         cmd = _target_command_or_none(env)
         if cmd is None:
             random_target_env_count = 0
+            random_missing_env_count = 0
             selected_block_mean = 0.0
         else:
             random_target_env_count = int(cmd.selected_is_random.sum().item())
+            if missing_mask is None:
+                random_missing_env_count = 0
+            else:
+                random_missing_env_count = int(
+                    (cmd.selected_is_random & torch.any(missing_mask, dim=1)).sum().item()
+                )
             selected_block_mean = cmd.selected_block_idx.float().mean().item()
         best_env = int(torch.argmax(progress).item())
         worst_env = int(torch.argmin(progress).item())
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f}, random_target={random_target_block_scale(env).item():.3f})",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
             f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
-            f"target(random_envs={random_target_env_count}/{env.num_envs}, selected_idx_mean={selected_block_mean:.2f})",
+            f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, selected_idx_mean={selected_block_mean:.2f})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
