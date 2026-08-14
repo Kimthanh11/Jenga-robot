@@ -259,8 +259,8 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
         else:
             yaw_home = math.pi / 2
             extraction_w = (0.0, -1.0, 0.0)
-            slide_home = cy + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[1]
-            slide_y_home = HOOK_BASE_POS[0] - cx
+            slide_home = cx - HOOK_BASE_POS[0]
+            slide_y_home = cy + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[1]
             task_quat = _rz_quat(-math.pi / 2)
 
         entries.append(
