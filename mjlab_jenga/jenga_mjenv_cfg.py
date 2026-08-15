@@ -400,17 +400,13 @@ class TargetBlockCommand(CommandTerm):
         if self._num_selectable == 0:
             raise ValueError("TargetBlockCommand needs at least one selectable block.")
 
-        hook = env.scene["hook"]
-        hook_joint_ids, _ = hook.find_joints(
-            ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw"),
-            preserve_order=True,
-        )
-        self._hook = hook
-        self._hook_joint_ids = torch.tensor(
-            hook_joint_ids,
-            dtype=torch.long,
-            device=self.device,
-        )
+        self._hook = env.scene["hook"]
+        expected_hook_joints = ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw")
+        if tuple(self._hook.joint_names) != expected_hook_joints:
+            raise ValueError(
+                f"Unexpected hook joint order: {self._hook.joint_names}. "
+                f"Expected {expected_hook_joints}."
+            )
 
         self.selected_block_idx = torch.full(
             (self.num_envs,),
@@ -608,16 +604,10 @@ class TargetBlockCommand(CommandTerm):
             ).uniform_(-0.02, 0.02)
             self._hook.write_joint_position_to_sim(
                 target,
-                joint_ids=self._hook_joint_ids,
                 env_ids=random_env_ids,
             )
             self._hook.write_joint_velocity_to_sim(
-                torch.zeros(
-                    target.shape[0],
-                    self._hook_joint_ids.numel(),
-                    device=self.device,
-                ),
-                joint_ids=self._hook_joint_ids,
+                torch.zeros_like(target),
                 env_ids=random_env_ids,
             )
 
