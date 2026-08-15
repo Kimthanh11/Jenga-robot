@@ -281,12 +281,14 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
         if even_layer:
             yaw_home = 0.0
             extraction_w = (-1.0, 0.0, 0.0)
+            contact_face_y = CONTACT_FACE_Y
             slide_home = cx + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[0]
             slide_y_home = cy - HOOK_BASE_POS[1]
             task_quat = _rz_quat(math.pi)
         else:
             yaw_home = math.pi / 2
             extraction_w = (0.0, -1.0, 0.0)
+            contact_face_y = CONTACT_Y_LIMIT
             slide_home = cx - HOOK_BASE_POS[0]
             slide_y_home = cy + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[1]
             task_quat = _rz_quat(-math.pi / 2)
@@ -298,6 +300,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
                 "slot": slot,
                 "start_pos": (cx, cy, cz),
                 "extraction_w": extraction_w,
+                "contact_face_y": contact_face_y,
                 "task_quat": task_quat,
                 # Order matches our hook joint order: slide, slide_y, slide_z, yaw.
                 "hook_home": (
@@ -344,6 +347,11 @@ class TargetBlockCommand(CommandTerm):
         )
         self._extraction = torch.tensor(
             [entry["extraction_w"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._contact_face_y = torch.tensor(
+            [entry["contact_face_y"] for entry in entries],
             dtype=torch.float32,
             device=self.device,
         )
@@ -472,6 +480,9 @@ class TargetBlockCommand(CommandTerm):
 
     def selected_extraction_w(self) -> torch.Tensor:
         return self._extraction[self.selected_block_idx]
+
+    def selected_contact_face_y(self) -> torch.Tensor:
+        return self._contact_face_y[self.selected_block_idx]
 
     def selected_hook_home(self) -> torch.Tensor:
         return self._hook_home[self.selected_block_idx]
@@ -1202,6 +1213,13 @@ def target_selection_features(env: ManagerBasedRlEnv) -> torch.Tensor:
     return cmd.selected_target_features()
 
 
+def target_contact_face_y(env: ManagerBasedRlEnv) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is None:
+        return torch.full((env.num_envs,), CONTACT_FACE_Y, device=env.device)
+    return cmd.selected_contact_face_y()
+
+
 def _initial_block_pos(block_name: str) -> torch.Tensor:
     for block_info in _get_block_infos():
         if block_info["name"] == block_name:
@@ -1365,7 +1383,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         touch_raw = torch.clamp(action[:, 1:3], -ACTION_CLIP, ACTION_CLIP)
         contact_block = torch.zeros(env.num_envs, 3, device=env.device)
         contact_block[:, 0] = touch_raw[:, 0] * CONTACT_X_LIMIT * touch_curriculum_scale(env)
-        contact_block[:, 1] = CONTACT_FACE_Y
+        contact_block[:, 1] = target_contact_face_y(env)
         contact_block[:, 2] = touch_raw[:, 1] * CONTACT_Z_LIMIT * touch_curriculum_scale(env)
         touch_target = block_contact_to_hook_yz_targets(env, contact_block)
         block_pos_world, block_quat_world = target_block_pose(env)
@@ -1411,7 +1429,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, counts={selected_block_counts})",
             f"missing_patterns({missing_pattern_counts})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
-            f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
+            f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
             f"transform(roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f})",
             f"hook(joint_x_mean={hook_x_joint.mean().item():.5f}, joint_x_minmax=({hook_x_joint.min().item():.5f},{hook_x_joint.max().item():.5f}), hook_x_mean={hook_x.mean().item():.5f}, hook_x_minmax=({hook_x.min().item():.5f},{hook_x.max().item():.5f}), joint_yz=({hook_joint_pos[:, 1].mean().item():.5f},{hook_joint_pos[:, 2].mean().item():.5f}), joint_yaw={hook_joint_pos[:, 3].mean().item():.5f})",
@@ -1605,7 +1623,11 @@ class BlockLocalHookYZAction(ActionTerm):
         contact_block = torch.zeros(self.num_envs, 3, device=self.device)
         scaled_actions = self._raw_actions * self._scale * touch_curriculum_scale(self._env)
         contact_block[:, 0] = scaled_actions[:, 0]
-        contact_block[:, 1] = self.cfg.contact_y
+        cmd = _target_command_or_none(self._env)
+        if cmd is not None and self.cfg.asset_cfg.name == _TARGET_BLOCK_CFG.name:
+            contact_block[:, 1] = cmd.selected_contact_face_y()
+        else:
+            contact_block[:, 1] = self.cfg.contact_y
         contact_block[:, 2] = scaled_actions[:, 1]
         self._contact_block[:] = contact_block
 
