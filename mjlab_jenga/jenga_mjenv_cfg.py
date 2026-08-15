@@ -1239,10 +1239,11 @@ TOUCH_CURRICULUM_END = 1.0
 TOUCH_CURRICULUM_BEGIN_STEP = 0
 TOUCH_CURRICULUM_STEPS = 1
 YAW_CURRICULUM_START = 0.0
-YAW_CURRICULUM_END = 0.15
-YAW_CURRICULUM_BEGIN_STEP = 20_000
-YAW_CURRICULUM_STEPS = 80_000
-YAW_TARGET_LIMIT = 1.0
+YAW_CURRICULUM_END = 0.6
+YAW_CURRICULUM_BEGIN_STEP = 80_000
+YAW_CURRICULUM_STEPS = 160_000
+YAW_ACTION_SCALE = 0.06
+YAW_TARGET_LIMIT = 0.6
 ACTION_CLIP = 1.0
 HOOK_SLIDE_Y_TARGET_RANGE = (-0.13, 0.23)
 HOOK_SLIDE_Z_TARGET_RANGE = (-0.17, 0.13)
@@ -1417,12 +1418,14 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
                 )
             selected_block_counts = cmd.selected_block_count_summary()
         missing_pattern_counts = missing_pattern_count_summary(env)
+        yaw_scale = yaw_curriculum_scale(env)
+        yaw_step_max = YAW_ACTION_SCALE * yaw_scale
         best_env = int(torch.argmax(progress).item())
         worst_env = int(torch.argmin(progress).item())
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_scale.item():.3f}, yaw_step_max={yaw_step_max.item():.5f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
             f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
@@ -1782,7 +1785,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
         "yaw" : CurriculumYawActionCfg(
             entity_name="hook",
-            scale=0.05,
+            scale=YAW_ACTION_SCALE,
         ),
     }
 
