@@ -20,6 +20,12 @@ def main() -> None:
         description="Play a checkpoint with one forced random target block."
     )
     parser.add_argument("--checkpoint", default="model_last.pt")
+    parser.add_argument(
+        "--agent",
+        choices=("zero", "random", "trained"),
+        default="zero",
+        help="Use zero to inspect reset/teleport positions without a policy.",
+    )
     parser.add_argument("--viewer", default="native")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--num-envs", type=int, default=1)
@@ -29,6 +35,9 @@ def main() -> None:
         help="Optional block name to force, for example b1_1 or b2_3.",
     )
     args = parser.parse_args()
+
+    if args.agent == "trained" and not args.checkpoint:
+        parser.error("--checkpoint is required when --agent trained is used")
 
     _maybe_force_cpu()
 
@@ -62,8 +71,8 @@ def main() -> None:
     run_play(
         task_id,
         PlayConfig(
-            agent="trained",
-            checkpoint_file=args.checkpoint,
+            agent=args.agent,
+            checkpoint_file=args.checkpoint if args.agent == "trained" else None,
             viewer=args.viewer,
             num_envs=args.num_envs,
             device=args.device,
