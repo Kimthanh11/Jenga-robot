@@ -23,6 +23,11 @@ def main() -> None:
     parser.add_argument("--viewer", default="native")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--num-envs", type=int, default=1)
+    parser.add_argument(
+        "--target",
+        default=None,
+        help="Optional block name to force, for example b1_1 or b2_3.",
+    )
     args = parser.parse_args()
 
     _maybe_force_cpu()
@@ -40,11 +45,17 @@ def main() -> None:
     cfg.RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
     cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END
 
+    env_cfg = cfg.jenga_env_cfg()
+    play_env_cfg = cfg.jenga_env_cfg(play=True)
+    if args.target is not None:
+        env_cfg.commands["target_block"].force_target_name = args.target
+        play_env_cfg.commands["target_block"].force_target_name = args.target
+
     task_id = "Mjlab-Jenga-ForcedRandomTargetPlay"
     register_mjlab_task(
         task_id=task_id,
-        env_cfg=cfg.jenga_env_cfg(),
-        play_env_cfg=cfg.jenga_env_cfg(play=True),
+        env_cfg=env_cfg,
+        play_env_cfg=play_env_cfg,
         rl_cfg=cfg.jenga_ppo_runner_cfg(),
     )
 

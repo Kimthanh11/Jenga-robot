@@ -58,7 +58,7 @@ BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
 # Per-block build-time domain randomization. Keep this small: larger shape
 # variation can create unrealistic overlaps in the stacked tower.
 BLOCK_DENSITY = 650.0
-BLOCK_DENSITY_RANDOMIZATION = 0.0
+BLOCK_DENSITY_RANDOMIZATION = 0.05
 BLOCK_SIZE_RANDOMIZATION = (0.0, 0.0, 0.0)
 CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
@@ -98,6 +98,7 @@ RANDOM_TARGET_BLOCK_NAMES = (
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
 HOOK_APPROACH_GAP = 0.02
+HOOK_BOTTOM_LAYER_Z_LIFT = 0.006
 
 COLOR_A = (0.68, 0.85, 0.90, 1.0)
 COLOR_B = (0.96, 0.96, 0.95, 1.0)
@@ -249,6 +250,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
         cx, cy, cz = block_info["pos"]
         layer = int(name[1:].split("_")[0])
         even_layer = layer % 2 == 0
+        hook_center_z = cz + (HOOK_BOTTOM_LAYER_Z_LIFT if layer == 1 else 0.0)
 
         if even_layer:
             yaw_home = 0.0
@@ -274,7 +276,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
                 "hook_home": (
                     slide_home,
                     slide_y_home,
-                    cz - HOOK_BASE_POS[2],
+                    hook_center_z - HOOK_BASE_POS[2],
                     yaw_home,
                 ),
             }
@@ -336,6 +338,11 @@ class TargetBlockCommand(CommandTerm):
 
         name_to_idx = {name: idx for idx, name in enumerate(names)}
         self._fixed_idx = name_to_idx[cfg.fixed_target_name]
+        self._force_target_idx: int | None = None
+        if cfg.force_target_name is not None:
+            if cfg.force_target_name not in name_to_idx:
+                raise ValueError(f"Unknown forced target block: {cfg.force_target_name}")
+            self._force_target_idx = name_to_idx[cfg.force_target_name]
         selectable = [
             name_to_idx[name]
             for name in cfg.selectable_target_names
@@ -487,29 +494,38 @@ class TargetBlockCommand(CommandTerm):
         if num_resets == 0:
             return
 
-        random_probability = random_target_block_scale(self._env)
-        use_random = torch.rand(num_resets, device=self.device) < random_probability
-        present_by_block = self._present_by_block()
-        envs_without_missing = present_by_block[env_ids].all(dim=1)
-        allow_random_with_missing = (
-            torch.rand(num_resets, device=self.device)
-            < random_target_with_missing_scale(self._env)
-        )
-        use_random &= envs_without_missing | allow_random_with_missing
-        selected = torch.full(
-            (num_resets,),
-            self._fixed_idx,
-            dtype=torch.long,
-            device=self.device,
-        )
-        if torch.any(use_random):
-            random_choices = torch.randint(
-                0,
-                self._num_selectable,
-                (int(use_random.sum().item()),),
+        if self._force_target_idx is None:
+            random_probability = random_target_block_scale(self._env)
+            use_random = torch.rand(num_resets, device=self.device) < random_probability
+            present_by_block = self._present_by_block()
+            envs_without_missing = present_by_block[env_ids].all(dim=1)
+            allow_random_with_missing = (
+                torch.rand(num_resets, device=self.device)
+                < random_target_with_missing_scale(self._env)
+            )
+            use_random &= envs_without_missing | allow_random_with_missing
+            selected = torch.full(
+                (num_resets,),
+                self._fixed_idx,
+                dtype=torch.long,
                 device=self.device,
             )
-            selected[use_random] = self._selectable[random_choices]
+            if torch.any(use_random):
+                random_choices = torch.randint(
+                    0,
+                    self._num_selectable,
+                    (int(use_random.sum().item()),),
+                    device=self.device,
+                )
+                selected[use_random] = self._selectable[random_choices]
+        else:
+            use_random = torch.ones(num_resets, dtype=torch.bool, device=self.device)
+            selected = torch.full(
+                (num_resets,),
+                self._force_target_idx,
+                dtype=torch.long,
+                device=self.device,
+            )
 
         self.selected_block_idx[env_ids] = selected
         self.selected_is_random[env_ids] = use_random
@@ -546,6 +562,7 @@ class TargetBlockCommand(CommandTerm):
 class TargetBlockCommandCfg(CommandTermCfg):
     fixed_target_name: str = FIXED_TARGET_BLOCK_NAME
     selectable_target_names: tuple[str, ...] = RANDOM_TARGET_BLOCK_NAMES
+    force_target_name: str | None = None
 
     def build(self, env: ManagerBasedRlEnv) -> TargetBlockCommand:
         return TargetBlockCommand(self, env)
