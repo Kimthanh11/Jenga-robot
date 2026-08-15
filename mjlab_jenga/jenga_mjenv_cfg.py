@@ -980,11 +980,11 @@ def target_block_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
 def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     cmd = _target_command_or_none(env)
     if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
-        return cmd.selected_target_vel_w()
+        return cmd.selected_target_vel_w()[:, :3]
 
     asset: Entity = env.scene[asset_cfg.name]
     velocity = asset.data.body_link_vel_w[:, asset_cfg.body_ids, :]
-    return velocity.squeeze(1)
+    return velocity.squeeze(1)[:, :3]
 
 
 # get COM of the tower
