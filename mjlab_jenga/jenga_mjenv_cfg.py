@@ -1633,7 +1633,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
-            num_envs=256,
+            num_envs=512,
             env_spacing=4.0,
         ),
         #scale_rewards_by_dt=False,
