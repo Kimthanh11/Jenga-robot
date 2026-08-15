@@ -72,6 +72,8 @@ LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 170_000
 MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 120_000
 MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
+MISSING_BLOCK_DOUBLE_BEGIN_STEP = 520_000
+MISSING_BLOCK_TRIPLE_BEGIN_STEP = 760_000
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
 MISSING_BLOCK_PARK_SPACING = 0.2
 RANDOM_TARGET_BLOCK_BEGIN_STEP = 350_000
@@ -192,11 +194,27 @@ def _get_block_infos():
     return block_infos
 
 
-MISSING_BLOCK_PATTERNS = (
-    (),
+MISSING_BLOCK_SINGLE_PATTERNS = (
     ("b4_1",),
     ("b4_3",),
     ("b5_2",),
+)
+MISSING_BLOCK_DOUBLE_PATTERNS = (
+    ("b4_1", "b5_2"),
+    ("b4_3", "b5_2"),
+    ("b3_2", "b5_1"),
+    ("b3_3", "b5_3"),
+)
+MISSING_BLOCK_TRIPLE_PATTERNS = (
+    ("b3_2", "b4_1", "b5_2"),
+    ("b3_3", "b4_3", "b5_2"),
+    ("b4_1", "b5_2", "b8_2"),
+)
+MISSING_BLOCK_PATTERNS = (
+    (),
+    *MISSING_BLOCK_SINGLE_PATTERNS,
+    *MISSING_BLOCK_DOUBLE_PATTERNS,
+    *MISSING_BLOCK_TRIPLE_PATTERNS,
 )
 MISSING_BLOCK_CANDIDATES = tuple(
     sorted({block_name for pattern in MISSING_BLOCK_PATTERNS for block_name in pattern})
@@ -594,6 +612,27 @@ def missing_block_randomization_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     )
 
 
+def missing_block_max_count(env: ManagerBasedRlEnv) -> int:
+    """Maximum number of missing blocks allowed at the current curriculum step."""
+    if env.common_step_counter >= MISSING_BLOCK_TRIPLE_BEGIN_STEP:
+        return 3
+    if env.common_step_counter >= MISSING_BLOCK_DOUBLE_BEGIN_STEP:
+        return 2
+    if env.common_step_counter >= MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP:
+        return 1
+    return 0
+
+
+def _active_missing_pattern_ids(env: ManagerBasedRlEnv) -> torch.Tensor:
+    max_count = missing_block_max_count(env)
+    active_ids = [
+        idx
+        for idx, pattern in enumerate(MISSING_BLOCK_PATTERNS)
+        if 0 < len(pattern) <= max_count
+    ]
+    return torch.tensor(active_ids, dtype=torch.long, device=env.device)
+
+
 def _ensure_missing_block_state(env: ManagerBasedRlEnv) -> torch.Tensor:
     if not hasattr(env, "_jenga_missing_block_mask"):
         env._jenga_missing_block_mask = torch.zeros(
@@ -633,17 +672,19 @@ def randomize_missing_blocks(
     num_resets = len(env_ids)
     pattern_ids = torch.zeros(num_resets, dtype=torch.long, device=env.device)
     missing_probability = missing_block_randomization_scale(env)
+    active_pattern_ids = _active_missing_pattern_ids(env)
 
-    if len(MISSING_BLOCK_PATTERNS) > 1 and missing_probability.item() > 0.0:
+    if active_pattern_ids.numel() > 0 and missing_probability.item() > 0.0:
         use_missing_pattern = torch.rand(num_resets, device=env.device) < missing_probability
         num_missing_patterns = int(use_missing_pattern.sum().item())
         if num_missing_patterns > 0:
-            pattern_ids[use_missing_pattern] = torch.randint(
-                1,
-                len(MISSING_BLOCK_PATTERNS),
+            active_choice_ids = torch.randint(
+                0,
+                active_pattern_ids.numel(),
                 (num_missing_patterns,),
                 device=env.device,
             )
+            pattern_ids[use_missing_pattern] = active_pattern_ids[active_choice_ids]
 
     missing_mask = _ensure_missing_block_state(env)
     missing_mask[env_ids] = False
@@ -1192,7 +1233,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
+            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_curriculum_scale(env).item():.3f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
             f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
