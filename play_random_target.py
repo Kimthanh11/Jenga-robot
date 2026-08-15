@@ -1,0 +1,64 @@
+import argparse
+import os
+
+
+def _maybe_force_cpu() -> None:
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        return
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return
+    except Exception:
+        pass
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Play a checkpoint with one forced random target block."
+    )
+    parser.add_argument("--checkpoint", default="model_last.pt")
+    parser.add_argument("--viewer", default="native")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--num-envs", type=int, default=1)
+    args = parser.parse_args()
+
+    _maybe_force_cpu()
+
+    # Importing the package registers the normal training task. We then patch only
+    # this process and register a separate play-only task for teleport inspection.
+    import mjlab_jenga.jenga_mjenv_cfg as cfg
+    from mjlab.scripts.play import PlayConfig, run_play
+    from mjlab.tasks.registry import register_mjlab_task
+
+    cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+    cfg.RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
+    cfg.RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
+    cfg.RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
+    cfg.RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+    cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END
+
+    task_id = "Mjlab-Jenga-ForcedRandomTargetPlay"
+    register_mjlab_task(
+        task_id=task_id,
+        env_cfg=cfg.jenga_env_cfg(),
+        play_env_cfg=cfg.jenga_env_cfg(play=True),
+        rl_cfg=cfg.jenga_ppo_runner_cfg(),
+    )
+
+    run_play(
+        task_id,
+        PlayConfig(
+            agent="trained",
+            checkpoint_file=args.checkpoint,
+            viewer=args.viewer,
+            num_envs=args.num_envs,
+            device=args.device,
+        ),
+    )
+
+
+if __name__ == "__main__":
+    main()
