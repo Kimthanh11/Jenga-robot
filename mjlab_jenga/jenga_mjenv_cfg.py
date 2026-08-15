@@ -976,6 +976,21 @@ def hook_tip_pos_in_block_frame(env : ManagerBasedRlEnv, asset_cfg : SceneEntity
     return hook_tip_pos_block 
 
 
+def target_extraction_direction(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """World direction in which the selected target block should be extracted."""
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_extraction_w()
+
+    return torch.tensor(
+        [-1.0, 0.0, 0.0],
+        device=env.device,
+    ).unsqueeze(0).repeat(env.num_envs, 1)
+
+
 def _initial_block_pos(block_name: str) -> torch.Tensor:
     for block_info in _get_block_infos():
         if block_info["name"] == block_name:
@@ -1486,15 +1501,18 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=target_block_pos,
             params={"asset_cfg": _TARGET_BLOCK_CFG}
         ),
+        "hook_tip_block_local_position": ObservationTermCfg(
+            func=hook_tip_pos_in_block_frame
+        ),
+        "target_extraction_direction": ObservationTermCfg(
+            func=target_extraction_direction,
+        ),
     }
 
     critic_terms = {
         **actor_terms,
         "block_all_pos": ObservationTermCfg(
             func=all_block_pos,
-        ),
-        "hook_tip_block_local_position": ObservationTermCfg(
-            func=hook_tip_pos_in_block_frame
         ),
         #"block_all_vel": ObservationTermCfg(
          #   func=target_block_vel,
