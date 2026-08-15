@@ -602,14 +602,12 @@ class TargetBlockCommand(CommandTerm):
                 device=self.device,
                 dtype=target.dtype,
             ).uniform_(-0.02, 0.02)
-            self._hook.write_joint_position_to_sim(
-                target,
-                env_ids=random_env_ids,
-            )
-            self._hook.write_joint_velocity_to_sim(
-                torch.zeros_like(target),
-                env_ids=random_env_ids,
-            )
+            joint_pos = self._hook.data.joint_pos.clone()
+            joint_vel = self._hook.data.joint_vel.clone()
+            joint_pos[random_env_ids] = target
+            joint_vel[random_env_ids] = 0.0
+            self._hook.write_joint_position_to_sim(joint_pos)
+            self._hook.write_joint_velocity_to_sim(joint_vel)
 
     def _update_command(self) -> None:
         pass
