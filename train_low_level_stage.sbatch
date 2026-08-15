@@ -2,8 +2,7 @@
 # Train an explicit Jenga low-level stage.
 #
 # Usage:
-#   sbatch train_low_level_stage.sbatch fixed 10000 768
-#   sbatch train_low_level_stage.sbatch target 10000 768 <fixed_run> model_9999.pt
+#   sbatch train_low_level_stage.sbatch target 10000 768
 #   sbatch train_low_level_stage.sbatch missing1 10000 768 <target_run> model_9999.pt
 
 #SBATCH --job-name=jenga_low
