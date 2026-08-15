@@ -19,6 +19,7 @@ from mjlab.envs.mdp import (
   reset_joints_by_offset,
   time_out,
 )
+from mjlab.envs.mdp.dr import geom_friction, pseudo_inertia
 from mjlab.envs.mdp.actions import (
     JointEffortActionCfg,
     JointVelocityActionCfg,
@@ -27,7 +28,7 @@ from mjlab.envs.mdp.actions import (
 from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
 from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
-from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.event_manager import EventTermCfg, RecomputeLevel, requires_model_fields
 from mjlab.managers.observation_manager import (
   ObservationGroupCfg,
   ObservationTermCfg,
@@ -58,12 +59,18 @@ BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
 # Per-block build-time domain randomization. Keep this small: larger shape
 # variation can create unrealistic overlaps in the stacked tower.
 BLOCK_DENSITY = 650.0
-BLOCK_DENSITY_RANDOMIZATION = 0.05
+BLOCK_DENSITY_RANDOMIZATION = 0.0
 BLOCK_SIZE_RANDOMIZATION = (0.0, 0.0, 0.0)
+RESET_DENSITY_RANDOMIZATION = 0.05
+RESET_FRICTION_SLIDING_RANGE = (0.2, 0.4)
+RESET_FRICTION_TORSIONAL_RANGE = (0.01, 0.06)
+RESET_FRICTION_ROLLING_RANGE = (0.001, 0.001)
 CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
 CONTACT_Z_LIMIT = 0.006
 CONTACT_FACE_Y = -CONTACT_Y_LIMIT
+PUSH_X_VELOCITY_SCALE = 0.05
+PUSH_X_VELOCITY_CLIP = (-0.6, 0.6)
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
@@ -74,6 +81,7 @@ MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 120_000
 MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
 MISSING_BLOCK_DOUBLE_BEGIN_STEP = 520_000
 MISSING_BLOCK_TRIPLE_BEGIN_STEP = 760_000
+FORCED_MISSING_BLOCK_COUNT: int | None = None
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
 MISSING_BLOCK_PARK_SPACING = 0.2
 RANDOM_TARGET_BLOCK_BEGIN_STEP = 350_000
@@ -266,7 +274,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
         name = block_info["name"]
         names.append(name)
         cx, cy, cz = block_info["pos"]
-        layer = int(name[1:].split("_")[0])
+        layer, slot = (int(part) for part in name[1:].split("_"))
         even_layer = layer % 2 == 0
         hook_center_z = cz + (HOOK_BOTTOM_LAYER_Z_LIFT if layer == 1 else 0.0)
 
@@ -287,6 +295,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
             {
                 "name": name,
                 "layer": layer,
+                "slot": slot,
                 "start_pos": (cx, cy, cz),
                 "extraction_w": extraction_w,
                 "task_quat": task_quat,
@@ -345,6 +354,18 @@ class TargetBlockCommand(CommandTerm):
         )
         self._hook_home = torch.tensor(
             [entry["hook_home"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._target_features = torch.tensor(
+            [
+                (
+                    (entry["layer"] - 1) / max(LAYERS - 1, 1),
+                    entry["slot"] - 2,
+                    1.0 if entry["layer"] % 2 == 0 else -1.0,
+                )
+                for entry in entries
+            ],
             dtype=torch.float32,
             device=self.device,
         )
@@ -457,6 +478,23 @@ class TargetBlockCommand(CommandTerm):
 
     def selected_task_quat_w(self) -> torch.Tensor:
         return self._task_quat[self.selected_block_idx]
+
+    def selected_target_features(self) -> torch.Tensor:
+        target_features = self._target_features[self.selected_block_idx]
+        random_flag = self.selected_is_random.to(dtype=torch.float32).unsqueeze(-1)
+        return torch.cat((target_features, random_flag), dim=-1)
+
+    def selected_block_count_summary(self, max_items: int = 6) -> str:
+        unique, counts = torch.unique(self.selected_block_idx, return_counts=True)
+        order = torch.argsort(counts, descending=True)
+        items = []
+        for item_idx in order[:max_items].tolist():
+            block_idx = int(unique[item_idx].item())
+            count = int(counts[item_idx].item())
+            items.append(f"{self._all_names[block_idx]}:{count}")
+        if unique.numel() > max_items:
+            items.append("...")
+        return ",".join(items)
 
     def _update_metrics(self) -> None:
         all_pos = torch.stack(
@@ -614,6 +652,8 @@ def missing_block_randomization_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 def missing_block_max_count(env: ManagerBasedRlEnv) -> int:
     """Maximum number of missing blocks allowed at the current curriculum step."""
+    if FORCED_MISSING_BLOCK_COUNT is not None:
+        return FORCED_MISSING_BLOCK_COUNT
     if env.common_step_counter >= MISSING_BLOCK_TRIPLE_BEGIN_STEP:
         return 3
     if env.common_step_counter >= MISSING_BLOCK_DOUBLE_BEGIN_STEP:
@@ -625,11 +665,18 @@ def missing_block_max_count(env: ManagerBasedRlEnv) -> int:
 
 def _active_missing_pattern_ids(env: ManagerBasedRlEnv) -> torch.Tensor:
     max_count = missing_block_max_count(env)
-    active_ids = [
-        idx
-        for idx, pattern in enumerate(MISSING_BLOCK_PATTERNS)
-        if 0 < len(pattern) <= max_count
-    ]
+    if FORCED_MISSING_BLOCK_COUNT is None:
+        active_ids = [
+            idx
+            for idx, pattern in enumerate(MISSING_BLOCK_PATTERNS)
+            if 0 < len(pattern) <= max_count
+        ]
+    else:
+        active_ids = [
+            idx
+            for idx, pattern in enumerate(MISSING_BLOCK_PATTERNS)
+            if len(pattern) == max_count
+        ]
     return torch.tensor(active_ids, dtype=torch.long, device=env.device)
 
 
@@ -658,6 +705,25 @@ def current_missing_block_mask(
         return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
     return mask[:, MISSING_BLOCK_CANDIDATES.index(block_name)]
+
+
+def missing_pattern_count_summary(env: ManagerBasedRlEnv, max_items: int = 6) -> str:
+    pattern_ids = getattr(env, "_jenga_missing_pattern_id", None)
+    if pattern_ids is None:
+        return "none"
+
+    unique, counts = torch.unique(pattern_ids, return_counts=True)
+    order = torch.argsort(counts, descending=True)
+    items = []
+    for item_idx in order[:max_items].tolist():
+        pattern_idx = int(unique[item_idx].item())
+        count = int(counts[item_idx].item())
+        pattern = MISSING_BLOCK_PATTERNS[pattern_idx]
+        label = "none" if len(pattern) == 0 else "+".join(pattern)
+        items.append(f"{label}:{count}")
+    if unique.numel() > max_items:
+        items.append("...")
+    return ",".join(items)
 
 
 def randomize_missing_blocks(
@@ -844,6 +910,52 @@ def make_all_block_cfgs():
     return tuple(all_block_cfgs)
 
 _ALL_BLOCK_CFGS = make_all_block_cfgs() #get block configs (for position/velocity)
+
+
+def _density_alpha_range() -> tuple[float, float]:
+    low = 0.5 * math.log(1.0 - RESET_DENSITY_RANDOMIZATION)
+    high = 0.5 * math.log(1.0 + RESET_DENSITY_RANDOMIZATION)
+    return low, high
+
+
+@requires_model_fields(
+    "geom_friction",
+    "body_mass",
+    "body_ipos",
+    "body_inertia",
+    "body_iquat",
+    recompute=RecomputeLevel.set_const,
+)
+def randomize_block_physics(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | slice | None,
+) -> None:
+    if env_ids is not None and isinstance(env_ids, slice):
+        env_ids = torch.arange(env.num_envs, device=env.device)[env_ids]
+
+    friction_ranges = {
+        0: RESET_FRICTION_SLIDING_RANGE,
+        1: RESET_FRICTION_TORSIONAL_RANGE,
+        2: RESET_FRICTION_ROLLING_RANGE,
+    }
+    alpha_range = _density_alpha_range()
+
+    for block_info in _get_block_infos():
+        block_name = block_info["name"]
+        geom_friction(
+            env,
+            env_ids,
+            friction_ranges,
+            asset_cfg=SceneEntityCfg(block_name),
+            axes=[0, 1, 2],
+            operation="abs",
+        )
+        pseudo_inertia(
+            env,
+            env_ids,
+            alpha_range=alpha_range,
+            asset_cfg=SceneEntityCfg(block_name, body_names=(block_name,)),
+        )
 
 def all_block_pos(env):
     positions = []
@@ -1032,6 +1144,64 @@ def target_extraction_direction(
     ).unsqueeze(0).repeat(env.num_envs, 1)
 
 
+def target_task_quat_w(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
+        return cmd.selected_task_quat_w()
+
+    return torch.tensor(
+        _rz_quat(math.pi),
+        device=env.device,
+        dtype=torch.float32,
+    ).unsqueeze(0).repeat(env.num_envs, 1)
+
+
+def hook_tip_pos_in_task_frame(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    block_pos_world, _ = target_block_pose(env, asset_cfg)
+    task_quat_world = target_task_quat_w(env, asset_cfg)
+    return quat_apply_inverse(task_quat_world, hook_tip_pos(env) - block_pos_world)
+
+
+def target_block_movement_in_task_frame(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    movement_world = target_block_relative_movement(env, asset_cfg)
+    task_quat_world = target_task_quat_w(env, asset_cfg)
+    return quat_apply_inverse(task_quat_world, movement_world)
+
+
+def target_block_vel_in_task_frame(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    vel_world = target_block_vel(env, asset_cfg)
+    task_quat_world = target_task_quat_w(env, asset_cfg)
+    return quat_apply_inverse(task_quat_world, vel_world)
+
+
+def hook_joint_pos_relative_to_target_home(env: ManagerBasedRlEnv) -> torch.Tensor:
+    hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
+    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+    cmd = _target_command_or_none(env)
+    if cmd is None:
+        return hook_joint_pos
+    return hook_joint_pos - cmd.selected_hook_home()
+
+
+def target_selection_features(env: ManagerBasedRlEnv) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is None:
+        return torch.zeros(env.num_envs, 4, device=env.device)
+    return cmd.selected_target_features()
+
+
 def _initial_block_pos(block_name: str) -> torch.Tensor:
     for block_info in _get_block_infos():
         if block_info["name"] == block_name:
@@ -1218,7 +1388,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         if cmd is None:
             random_target_env_count = 0
             random_missing_env_count = 0
-            selected_block_mean = 0.0
+            selected_block_counts = "none"
         else:
             random_target_env_count = int(cmd.selected_is_random.sum().item())
             if missing_mask is None:
@@ -1227,7 +1397,8 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
                 random_missing_env_count = int(
                     (cmd.selected_is_random & torch.any(missing_mask, dim=1)).sum().item()
                 )
-            selected_block_mean = cmd.selected_block_idx.float().mean().item()
+            selected_block_counts = cmd.selected_block_count_summary()
+        missing_pattern_counts = missing_pattern_count_summary(env)
         best_env = int(torch.argmax(progress).item())
         worst_env = int(torch.argmin(progress).item())
         print(
@@ -1237,7 +1408,8 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
             f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
-            f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, selected_idx_mean={selected_block_mean:.2f})",
+            f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, counts={selected_block_counts})",
+            f"missing_patterns({missing_pattern_counts})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), fixed_face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
@@ -1538,15 +1710,20 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=joint_vel_rel,
             params={"asset_cfg": _HOOK_ALL_CFG}
         ),
-        "block_pos": ObservationTermCfg(
-            func=target_block_pos,
-            params={"asset_cfg": _TARGET_BLOCK_CFG}
+        "pusher_target_home_error": ObservationTermCfg(
+            func=hook_joint_pos_relative_to_target_home,
         ),
-        "hook_tip_block_local_position": ObservationTermCfg(
-            func=hook_tip_pos_in_block_frame
+        "target_selection": ObservationTermCfg(
+            func=target_selection_features,
         ),
-        "target_extraction_direction": ObservationTermCfg(
-            func=target_extraction_direction,
+        "hook_tip_task_position": ObservationTermCfg(
+            func=hook_tip_pos_in_task_frame,
+        ),
+        "target_task_movement": ObservationTermCfg(
+            func=target_block_movement_in_task_frame,
+        ),
+        "target_task_velocity": ObservationTermCfg(
+            func=target_block_vel_in_task_frame,
         ),
     }
 
@@ -1573,8 +1750,8 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "x_velocity": JointVelocityActionCfg(
             entity_name="hook",
             actuator_names=("hook_slide",),
-            scale=0.05,
-            clip={"hook_slide": (-0.6, 0.6)},
+            scale=PUSH_X_VELOCITY_SCALE,
+            clip={"hook_slide": PUSH_X_VELOCITY_CLIP},
         ),
         "block_local_touch": BlockLocalHookYZActionCfg( #yields 2 actions
             entity_name="hook",
@@ -1590,6 +1767,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
     hook_range = (-0.01, 0.01)
     events = {
+        "randomize_block_physics": EventTermCfg(
+            func=randomize_block_physics,
+            mode="reset",
+        ),
         "reset_hook_x": EventTermCfg(
             func=reset_joints_by_offset,
             mode="reset",
@@ -1735,6 +1916,65 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         episode_length_s=20.0,
     )
 
+
+def apply_low_level_stage(stage: str) -> None:
+    global MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP
+    global MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY
+    global MISSING_BLOCK_DOUBLE_BEGIN_STEP
+    global MISSING_BLOCK_TRIPLE_BEGIN_STEP
+    global RANDOM_TARGET_BLOCK_BEGIN_STEP
+    global RANDOM_TARGET_BLOCK_END_PROBABILITY
+    global RANDOM_TARGET_WITH_MISSING_BEGIN_STEP
+    global FORCED_MISSING_BLOCK_COUNT
+
+    MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 170_000
+    MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
+    MISSING_BLOCK_DOUBLE_BEGIN_STEP = 520_000
+    MISSING_BLOCK_TRIPLE_BEGIN_STEP = 760_000
+    RANDOM_TARGET_BLOCK_BEGIN_STEP = 350_000
+    RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.15
+    RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 620_000
+    FORCED_MISSING_BLOCK_COUNT = None
+
+    if stage == "fixed":
+        MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.0
+        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+    elif stage == "target":
+        MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+        RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.30
+        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+    elif stage == "missing1":
+        MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+        MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
+        MISSING_BLOCK_DOUBLE_BEGIN_STEP = 10**12
+        MISSING_BLOCK_TRIPLE_BEGIN_STEP = 10**12
+        RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.20
+        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+    elif stage == "missing2":
+        MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+        MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
+        MISSING_BLOCK_DOUBLE_BEGIN_STEP = 0
+        MISSING_BLOCK_TRIPLE_BEGIN_STEP = 10**12
+        RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.20
+        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 220_000
+    elif stage == "missing3":
+        MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+        MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
+        MISSING_BLOCK_DOUBLE_BEGIN_STEP = 0
+        MISSING_BLOCK_TRIPLE_BEGIN_STEP = 0
+        RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.20
+        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 220_000
+    elif stage == "full":
+        pass
+    else:
+        raise ValueError(
+            "Unknown stage. Use fixed, target, missing1, missing2, missing3, or full."
+        )
 
 
 def jenga_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
