@@ -15,7 +15,12 @@ def main() -> None:
     )
     parser.add_argument("--iterations", type=int, default=10000)
     parser.add_argument("--num-envs", type=int, default=768)
+    parser.add_argument("--load-run", default=None)
+    parser.add_argument("--load-checkpoint", default=None)
     args = parser.parse_args()
+
+    if (args.load_run is None) != (args.load_checkpoint is None):
+        parser.error("--load-run and --load-checkpoint must be given together")
 
     cfg.apply_low_level_stage(args.stage)
     env_cfg = cfg.jenga_env_cfg()
@@ -24,6 +29,10 @@ def main() -> None:
     agent_cfg = cfg.jenga_ppo_runner_cfg()
     agent_cfg.max_iterations = args.iterations
     agent_cfg.run_name = f"low_level_{args.stage}"
+    if args.load_run is not None:
+        agent_cfg.resume = True
+        agent_cfg.load_run = args.load_run
+        agent_cfg.load_checkpoint = args.load_checkpoint
 
     task_id = f"Mjlab-Jenga-LowLevel-{args.stage}"
     register_mjlab_task(
