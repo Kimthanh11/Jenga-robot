@@ -69,8 +69,8 @@ CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
 CONTACT_Z_LIMIT = 0.006
 CONTACT_FACE_Y = -CONTACT_Y_LIMIT
-PUSH_X_VELOCITY_SCALE = 0.05
-PUSH_X_VELOCITY_CLIP = (-0.25, 0.25)
+PUSH_X_VELOCITY_SCALE = 0.03
+PUSH_X_VELOCITY_CLIP = (-0.05, 0.05)
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
@@ -817,7 +817,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   </worldbody>
 
   <actuator>
-    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>    
+    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.05 0.05" kv="150"/>    
     <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.13 0.23" kp="50"/>
     <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.17 0.13" kp="50"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1.1 2.7" kp="20"/>
@@ -1387,6 +1387,11 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         )
         roundtrip_error = contact_roundtrip - contact_block
         tip_contact_error_block = hook_tip_block - contact_block
+        x_velocity_target = torch.clamp(
+            action[:, 0] * PUSH_X_VELOCITY_SCALE,
+            PUSH_X_VELOCITY_CLIP[0],
+            PUSH_X_VELOCITY_CLIP[1],
+        )
         hook_x_joint = hook_joint_pos[:, 0]
         missing_mask = getattr(env, "_jenga_missing_block_mask", None)
         if missing_mask is None:
@@ -1423,7 +1428,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
             f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, counts={selected_block_counts})",
             f"missing_patterns({missing_pattern_counts})",
-            f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f})",
+            f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f}, x_vel_target={x_velocity_target.mean().item():.5f})",
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
             f"transform(roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f})",
@@ -1838,7 +1843,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         # ),
         "action_rate": RewardTermCfg(
             func=action_rate_l2,
-            weight=-0.001,
+            weight=-0.0002,
         ),
         "successful_extract": RewardTermCfg(
             func=success_block_reward,
