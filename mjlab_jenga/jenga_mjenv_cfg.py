@@ -1836,10 +1836,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         #     weight=-0.01,
         #     params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
         # ),
-        # "action_rate": RewardTermCfg( #to prevent the hook from wild jumping
-        #     func=action_rate_l2,
-        #     weight=-0.001,
-        # ),
+        "action_rate": RewardTermCfg(
+            func=action_rate_l2,
+            weight=-0.001,
+        ),
         "successful_extract": RewardTermCfg(
             func=success_block_reward,
             weight=900.0,
@@ -1964,9 +1964,9 @@ def apply_low_level_stage(stage: str) -> None:
     elif stage == "target":
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
         RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
-        RANDOM_TARGET_BLOCK_RAMP_STEPS = 150_000
+        RANDOM_TARGET_BLOCK_RAMP_STEPS = 250_000
         RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.30
-        RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.85
         RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
     elif stage == "missing1":
         MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
