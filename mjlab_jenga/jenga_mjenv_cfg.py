@@ -92,12 +92,20 @@ RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 620_000
 RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 240_000
 FIXED_TARGET_BLOCK_NAME = "b6_1"
 RANDOM_TARGET_BLOCK_NAMES = (
+    "b1_1",
+    "b1_3",
     "b2_1",
     "b2_2",
     "b2_3",
+    "b3_1",
     "b6_1",
     "b6_2",
     "b6_3",
+    "b7_1",
+    "b7_3",
+    "b9_1",
+    "b9_2",
+    "b9_3",
 )
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
@@ -286,8 +294,8 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
             yaw_home = math.pi / 2
             extraction_w = (0.0, -1.0, 0.0)
             contact_face_y = CONTACT_Y_LIMIT
-            slide_home = cx - HOOK_BASE_POS[0]
-            slide_y_home = cy + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[1]
+            slide_home = cy + long_half + HOOK_APPROACH_GAP + tip_offset - HOOK_BASE_POS[1]
+            slide_y_home = HOOK_BASE_POS[0] - cx
             task_quat = _rz_quat(-math.pi / 2)
 
         entries.append(
@@ -1522,6 +1530,31 @@ def block_point_to_world(
     return block_pos_world + block_vector_to_world(env, point_block, asset_cfg)
 
 
+def hook_slide_targets_for_tip_world(
+    env: ManagerBasedRlEnv,
+    tip_world: torch.Tensor,
+) -> torch.Tensor:
+    """Convert a desired hook-tip world point into slide joint coordinates."""
+    hook_asset = env.scene[_HOOK_ALL_CFG.name]
+    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+    yaw = hook_joint_pos[:, 3]
+
+    base = torch.tensor(
+        HOOK_BASE_POS,
+        device=tip_world.device,
+        dtype=tip_world.dtype,
+    ).view(1, 3)
+    rel = tip_world - base
+
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    slide = cos_yaw * rel[:, 0] + sin_yaw * rel[:, 1] - HOOK_TIP_LOCAL_X
+    slide_y = -sin_yaw * rel[:, 0] + cos_yaw * rel[:, 1]
+    slide_z = rel[:, 2]
+
+    return torch.stack((slide, slide_y, slide_z), dim=-1)
+
+
 def block_contact_to_hook_yz_targets(
     env: ManagerBasedRlEnv,
     contact_block: torch.Tensor,
@@ -1545,16 +1578,9 @@ def block_contact_to_hook_yz_targets(
     )
 
     contact_world = block_point_to_world(env, contact_block, asset_cfg)
-    hook_tip_world = hook_tip_pos(env)
-
-    hook_asset = env.scene[_HOOK_ALL_CFG.name]
-    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
-
-    current_y = hook_joint_pos[:, 1]
-    current_z = hook_joint_pos[:, 2]
-
-    target_y = current_y + (contact_world[:, 1] - hook_tip_world[:, 1])
-    target_z = current_z + (contact_world[:, 2] - hook_tip_world[:, 2])
+    target_slides = hook_slide_targets_for_tip_world(env, contact_world)
+    target_y = target_slides[:, 1]
+    target_z = target_slides[:, 2]
 
     target_y = torch.clamp(
         target_y,
@@ -1585,7 +1611,7 @@ class BlockLocalHookYZActionCfg(ActionTermCfg):
 
 
 class BlockLocalHookYZAction(ActionTerm):
-    """Policy action [y_block, z_block] -> hook_slide_y/z position targets."""
+    """Policy contact action [block_lateral, block_z] -> hook_slide_y/z targets."""
 
     cfg: BlockLocalHookYZActionCfg
 
