@@ -406,12 +406,15 @@ class TargetBlockCommand(CommandTerm):
             raise ValueError("TargetBlockCommand needs at least one selectable block.")
 
         self._hook = env.scene["hook"]
-        expected_hook_joints = ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw")
-        if tuple(self._hook.joint_names) != expected_hook_joints:
-            raise ValueError(
-                f"Unexpected hook joint order: {self._hook.joint_names}. "
-                f"Expected {expected_hook_joints}."
-            )
+        hook_home_joint_ids, _ = self._hook.find_joints(
+            ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw"),
+            preserve_order=True,
+        )
+        self._hook_home_joint_ids = torch.tensor(
+            hook_home_joint_ids,
+            dtype=torch.long,
+            device=self.device,
+        )
 
         self.selected_block_idx = torch.full(
             (self.num_envs,),
@@ -607,12 +610,16 @@ class TargetBlockCommand(CommandTerm):
                 device=self.device,
                 dtype=target.dtype,
             ).uniform_(-0.02, 0.02)
-            joint_pos = self._hook.data.joint_pos.clone()
-            joint_vel = self._hook.data.joint_vel.clone()
-            joint_pos[random_env_ids] = target
-            joint_vel[random_env_ids] = 0.0
-            self._hook.write_joint_position_to_sim(joint_pos)
-            self._hook.write_joint_velocity_to_sim(joint_vel)
+            self._hook.write_joint_position_to_sim(
+                target,
+                joint_ids=self._hook_home_joint_ids,
+                env_ids=random_env_ids,
+            )
+            self._hook.write_joint_velocity_to_sim(
+                torch.zeros_like(target),
+                joint_ids=self._hook_home_joint_ids,
+                env_ids=random_env_ids,
+            )
 
     def _update_command(self) -> None:
         pass
@@ -795,25 +802,28 @@ def _get_hook_spec() -> mujoco.MjSpec:
 
   <worldbody>
     <body name="hook" pos="0 0 0">
-      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.22 0.16" limited="true" damping="2"/>
-      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.13 0.23" limited="true" damping="2"/>
-      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.17 0.13" limited="true" damping="2"/>
       <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 150" limited="true" damping="2"/>
 
-      <geom type="box"
-            size="0.04 0.005 0.006"
-            pos="0 0 0"
-            rgba="0.1 0.1 0.9 1"
-            density="2000"
-            contype="0"
-            conaffinity="0"/>
+      <body name="hook_tool" pos="0 0 0">
+        <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.22 0.16" limited="true" damping="2"/>
+        <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.13 0.23" limited="true" damping="2"/>
+        <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.17 0.13" limited="true" damping="2"/>
 
-      <geom type="box"
-            size="0.006 0.004 0.004"
-            pos="-0.05 0 0"
-            rgba="1 0 0 1"
-            density="2000"/>
+        <geom type="box"
+              size="0.04 0.005 0.006"
+              pos="0 0 0"
+              rgba="0.1 0.1 0.9 1"
+              density="2000"
+              contype="0"
+              conaffinity="0"/>
+
+        <geom type="box"
+              size="0.006 0.004 0.004"
+              pos="-0.05 0 0"
+              rgba="1 0 0 1"
+              density="2000"/>
         <site name="hook_tip" pos="-0.056 0 0" size="0.003"/>
+      </body>
     </body>
   </worldbody>
 
