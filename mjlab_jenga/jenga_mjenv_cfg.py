@@ -130,8 +130,10 @@ _HOOK_YAW_CFG = SceneEntityCfg("hook", joint_names=("hook_yaw",))
 _HOOK_ALL_CFG = SceneEntityCfg(
     "hook",
     joint_names=("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw"),
+    preserve_order=True,
 )
 _HOOK_TIP_CFG = SceneEntityCfg("hook", site_names=("hook_tip",))
+_HOOK_JOINT_ORDER = ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw")
 
 
 
@@ -1159,6 +1161,13 @@ def hook_tip_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _HOOK_TIP
     return hook_tip_position.squeeze(1)
 
 
+def hook_joint_pos_ordered(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Hook joints in policy order: slide, slide_y, slide_z, yaw."""
+    asset: Entity = env.scene[_HOOK_ALL_CFG.name]
+    joint_ids, _ = asset.find_joints(_HOOK_JOINT_ORDER, preserve_order=True)
+    return asset.data.joint_pos[:, joint_ids]
+
+
 def hook_tip_pos_in_block_frame(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     """
     Convert hook_tip_pos World coordinate system into a Block-local coordinate system.
@@ -1230,8 +1239,7 @@ def target_block_vel_in_task_frame(
 
 
 def hook_joint_pos_relative_to_target_home(env: ManagerBasedRlEnv) -> torch.Tensor:
-    hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
-    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+    hook_joint_pos = hook_joint_pos_ordered(env)
     cmd = _target_command_or_none(env)
     if cmd is None:
         return hook_joint_pos
@@ -1396,15 +1404,14 @@ def hook_x_position(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _HOOK1_CFG,
 ) -> torch.Tensor:
-    asset: Entity = env.scene[asset_cfg.name]
-    return asset.data.joint_pos[:, asset_cfg.joint_ids].squeeze(-1)
+    del asset_cfg
+    return hook_joint_pos_ordered(env)[:, 0]
 
 
 def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
     if env.common_step_counter % 500 == 0:
         action = env.action_manager.action
-        hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
-        hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+        hook_joint_pos = hook_joint_pos_ordered(env)
         movement_rel = target_block_relative_movement(env)
         progress = block_progress(env)
         success = success_block_extract(env)
@@ -1574,8 +1581,7 @@ def hook_slide_targets_for_tip_world(
     tip_world: torch.Tensor,
 ) -> torch.Tensor:
     """Convert a desired hook-tip world point into slide joint coordinates."""
-    hook_asset = env.scene[_HOOK_ALL_CFG.name]
-    hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+    hook_joint_pos = hook_joint_pos_ordered(env)
     yaw = hook_joint_pos[:, 3]
 
     base = torch.tensor(

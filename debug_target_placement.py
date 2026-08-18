@@ -73,8 +73,7 @@ def _inspect_target(target_name: str, args) -> None:
             env.step(zero_action)
 
         cmd = env.command_manager.get_term("target_block")
-        hook_asset = env.scene[cfg._HOOK_ALL_CFG.name]
-        joints = hook_asset.data.joint_pos[:, cfg._HOOK_ALL_CFG.joint_ids]
+        joints = cfg.hook_joint_pos_ordered(env)
         target_home = cmd.selected_hook_home()
         tip_block = cfg.hook_tip_pos_in_block_frame(env)
         tip_task = cfg.hook_tip_pos_in_task_frame(env)
