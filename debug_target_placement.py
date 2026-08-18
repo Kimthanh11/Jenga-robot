@@ -49,7 +49,7 @@ def _expected_tip_block(cfg, cmd, env):
     return expected
 
 
-def _inspect_target(target_name: str, args) -> None:
+def _inspect_target(target_name: str, args) -> bool:
     import torch
     from mjlab.envs import ManagerBasedRlEnv
 
@@ -95,6 +95,20 @@ def _inspect_target(target_name: str, args) -> None:
             f"home_mean={_fmt(target_home.mean(dim=0).detach().cpu())}",
             flush=True,
         )
+        if args.max_error is None:
+            return True
+
+        max_error = float(error.abs().max().item())
+        passed = max_error <= args.max_error
+        print(
+            "DEBUG_TARGET_CHECK",
+            f"target={cmd._all_names[target_idx]}",
+            f"max_error={max_error:.5f}",
+            f"limit={args.max_error:.5f}",
+            f"passed={passed}",
+            flush=True,
+        )
+        return passed
     finally:
         env.close()
 
@@ -118,11 +132,20 @@ def main() -> None:
         action="store_true",
         help="Also print DEBUG_TARGET_RESET lines during env reset.",
     )
+    parser.add_argument(
+        "--max-error",
+        type=float,
+        default=None,
+        help="Fail when the largest reset placement error exceeds this value.",
+    )
     args = parser.parse_args()
 
     _maybe_force_cpu()
+    passed = True
     for target_name in args.targets:
-        _inspect_target(target_name, args)
+        passed &= _inspect_target(target_name, args)
+    if not passed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
