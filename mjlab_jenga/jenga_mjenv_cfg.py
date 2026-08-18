@@ -617,9 +617,39 @@ class TargetBlockCommand(CommandTerm):
             joint_ids=self._hook_home_joint_ids,
             env_ids=env_ids,
         )
+        if self.cfg.debug_target_reset:
+            self._print_reset_debug(env_ids, selected, use_random, target)
 
     def _update_command(self) -> None:
         pass
+
+    def _print_reset_debug(
+        self,
+        env_ids: torch.Tensor,
+        selected: torch.Tensor,
+        use_random: torch.Tensor,
+        target: torch.Tensor,
+    ) -> None:
+        max_items = min(8, int(env_ids.numel()))
+        for row in range(max_items):
+            block_idx = int(selected[row].item())
+            face_y = float(self._contact_face_y[block_idx].item())
+            target_name = self._all_names[block_idx]
+            layer, slot = (int(part) for part in target_name[1:].split("_"))
+            expected_z = HOOK_BOTTOM_LAYER_Z_LIFT if layer == 1 else 0.0
+            expected_y = face_y + math.copysign(HOOK_APPROACH_GAP, face_y)
+            home = target[row].detach().cpu().tolist()
+            print(
+                "DEBUG_TARGET_RESET",
+                f"env={int(env_ids[row].item())}",
+                f"target={target_name}",
+                f"layer_slot=({layer},{slot})",
+                f"random={bool(use_random[row].item())}",
+                f"home_slide_y_z_yaw=({home[0]:.5f},{home[1]:.5f},{home[2]:.5f},{home[3]:.5f})",
+                f"face_y={face_y:.5f}",
+                f"expected_tip_block=(0.00000,{expected_y:.5f},{expected_z:.5f})",
+                flush=True,
+            )
 
 
 @dataclass(kw_only=True)
@@ -627,6 +657,7 @@ class TargetBlockCommandCfg(CommandTermCfg):
     fixed_target_name: str = FIXED_TARGET_BLOCK_NAME
     selectable_target_names: tuple[str, ...] = RANDOM_TARGET_BLOCK_NAMES
     force_target_name: str | None = None
+    debug_target_reset: bool = False
 
     def build(self, env: ManagerBasedRlEnv) -> TargetBlockCommand:
         return TargetBlockCommand(self, env)

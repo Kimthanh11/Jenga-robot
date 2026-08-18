@@ -34,6 +34,11 @@ def main() -> None:
         default=None,
         help="Optional block name to force, for example b1_1 or b2_3.",
     )
+    parser.add_argument(
+        "--debug-target",
+        action="store_true",
+        help="Print target reset geometry for the first few envs.",
+    )
     args = parser.parse_args()
 
     if args.agent == "trained" and not args.checkpoint:
@@ -56,6 +61,8 @@ def main() -> None:
 
     env_cfg = cfg.jenga_env_cfg()
     play_env_cfg = cfg.jenga_env_cfg(play=True)
+    env_cfg.commands["target_block"].debug_target_reset = args.debug_target
+    play_env_cfg.commands["target_block"].debug_target_reset = args.debug_target
     if args.target is not None:
         env_cfg.commands["target_block"].force_target_name = args.target
         play_env_cfg.commands["target_block"].force_target_name = args.target
