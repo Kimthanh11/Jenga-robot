@@ -803,6 +803,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   <worldbody>
     <body name="hook" pos="0 0 0">
       <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 150" limited="true" damping="2"/>
+      <inertial pos="0 0 0" mass="0.001" diaginertia="1e-6 1e-6 1e-6"/>
 
       <body name="hook_tool" pos="0 0 0">
         <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.22 0.16" limited="true" damping="2"/>
