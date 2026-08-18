@@ -92,19 +92,12 @@ RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 620_000
 RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 240_000
 FIXED_TARGET_BLOCK_NAME = "b6_1"
 RANDOM_TARGET_BLOCK_NAMES = (
-    "b1_1",
-    "b1_3",
     "b2_1",
     "b2_2",
     "b2_3",
-    "b3_1",
     "b6_1",
+    "b6_2",
     "b6_3",
-    "b7_1",
-    "b7_3",
-    "b9_1",
-    "b9_2",
-    "b9_3",
 )
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
