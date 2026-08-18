@@ -16,7 +16,6 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import (
   joint_pos_rel,
   joint_vel_rel,
-  reset_joints_by_offset,
   time_out,
 )
 from mjlab.envs.mdp.dr import geom_friction, pseudo_inertia
@@ -601,25 +600,23 @@ class TargetBlockCommand(CommandTerm):
         self.selected_block_idx[env_ids] = selected
         self.selected_is_random[env_ids] = use_random
 
-        if torch.any(use_random):
-            random_env_ids = env_ids[use_random]
-            target = self._hook_home[selected[use_random]].clone()
-            target[:, :3] += torch.empty_like(target[:, :3]).uniform_(-0.002, 0.002)
-            target[:, 3] += torch.empty(
-                target.shape[0],
-                device=self.device,
-                dtype=target.dtype,
-            ).uniform_(-0.02, 0.02)
-            self._hook.write_joint_position_to_sim(
-                target,
-                joint_ids=self._hook_home_joint_ids,
-                env_ids=random_env_ids,
-            )
-            self._hook.write_joint_velocity_to_sim(
-                torch.zeros_like(target),
-                joint_ids=self._hook_home_joint_ids,
-                env_ids=random_env_ids,
-            )
+        target = self._hook_home[selected].clone()
+        target[:, :3] += torch.empty_like(target[:, :3]).uniform_(-0.002, 0.002)
+        target[:, 3] += torch.empty(
+            target.shape[0],
+            device=self.device,
+            dtype=target.dtype,
+        ).uniform_(-0.02, 0.02)
+        self._hook.write_joint_position_to_sim(
+            target,
+            joint_ids=self._hook_home_joint_ids,
+            env_ids=env_ids,
+        )
+        self._hook.write_joint_velocity_to_sim(
+            torch.zeros_like(target),
+            joint_ids=self._hook_home_joint_ids,
+            env_ids=env_ids,
+        )
 
     def _update_command(self) -> None:
         pass
@@ -1817,38 +1814,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     }
 
 
-    hook_range = (-0.01, 0.01)
     events = {
         "randomize_block_physics": EventTermCfg(
             func=randomize_block_physics,
             mode="reset",
-        ),
-        "reset_hook_x": EventTermCfg(
-            func=reset_joints_by_offset,
-            mode="reset",
-            params={
-                "position_range": (0.0, 0.0),
-                "velocity_range": (-0.01, 0.01),
-                "asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))
-            }
-        ),
-        "reset_hook_y": EventTermCfg(
-            func=reset_joints_by_offset,
-            mode="reset",
-            params={
-                "position_range": hook_range,
-                "velocity_range": (-0.01, 0.01),
-                "asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide_y",))
-            }
-        ),
-        "reset_hook_z": EventTermCfg(
-            func=reset_joints_by_offset,
-            mode="reset",
-            params={
-                "position_range": hook_range,
-                "velocity_range": (-0.01, 0.01),
-                "asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide_z",))
-            }
         ),
         "randomize_missing_blocks": EventTermCfg(
             func=randomize_missing_blocks,
