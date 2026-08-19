@@ -39,6 +39,11 @@ def main() -> None:
         action="store_true",
         help="Print target reset geometry for the first few envs.",
     )
+    parser.add_argument(
+        "--force-yaw",
+        action="store_true",
+        help="Enable the full yaw curriculum during play.",
+    )
     args = parser.parse_args()
 
     if args.agent == "trained" and not args.checkpoint:
@@ -57,7 +62,8 @@ def main() -> None:
     cfg.RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
     cfg.RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
     cfg.RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
-    cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END
+    if args.force_yaw:
+        cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END
 
     env_cfg = cfg.jenga_env_cfg()
     play_env_cfg = cfg.jenga_env_cfg(play=True)
