@@ -844,9 +844,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
               size="0.04 0.005 0.006"
               pos="0 0 0"
               rgba="0.1 0.1 0.9 1"
-              density="2000"
-              contype="0"
-              conaffinity="0"/>
+              density="2000"/>
 
         <geom type="box"
               size="0.006 0.004 0.004"
