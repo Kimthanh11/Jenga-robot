@@ -61,8 +61,8 @@ BLOCK_DENSITY = 650.0
 BLOCK_DENSITY_RANDOMIZATION = 0.0
 BLOCK_SIZE_RANDOMIZATION = (0.0, 0.0, 0.0)
 RESET_DENSITY_RANDOMIZATION = 0.15
-RESET_FRICTION_SLIDING_RANGE = (0.35, 0.60)
-RESET_FRICTION_TORSIONAL_RANGE = (0.02, 0.08)
+RESET_FRICTION_SLIDING_RANGE = (0.30, 0.50)
+RESET_FRICTION_TORSIONAL_RANGE = (0.015, 0.06)
 RESET_FRICTION_ROLLING_RANGE = (0.001, 0.001)
 CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
@@ -1278,8 +1278,8 @@ TOUCH_CURRICULUM_BEGIN_STEP = 0
 TOUCH_CURRICULUM_STEPS = 1
 YAW_CURRICULUM_START = 0.0
 YAW_CURRICULUM_END = 0.6
-YAW_CURRICULUM_BEGIN_STEP = 80_000
-YAW_CURRICULUM_STEPS = 160_000
+YAW_CURRICULUM_BEGIN_STEP = 220_000
+YAW_CURRICULUM_STEPS = 260_000
 YAW_ACTION_SCALE = 0.06
 YAW_TARGET_LIMIT = 0.6
 ACTION_CLIP = 1.0
@@ -1396,6 +1396,10 @@ def tower_large_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.norm(env.action_manager.action, dim=-1)
+
+
+def action_magnitude_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return torch.sum(torch.square(env.action_manager.action), dim=-1)
 
 
 def hook_x_position(
@@ -1879,6 +1883,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=action_rate_l2,
             weight=-0.0002,
         ),
+        "action_magnitude": RewardTermCfg(
+            func=action_magnitude_l2,
+            weight=-0.00001,
+        ),
         "successful_extract": RewardTermCfg(
             func=success_block_reward,
             weight=900.0,
@@ -2003,9 +2011,9 @@ def apply_low_level_stage(stage: str) -> None:
     elif stage == "target":
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
         RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
-        RANDOM_TARGET_BLOCK_RAMP_STEPS = 250_000
-        RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.30
-        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.85
+        RANDOM_TARGET_BLOCK_RAMP_STEPS = 450_000
+        RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.10
+        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.65
         RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
     elif stage == "missing1":
         MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
@@ -2061,7 +2069,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       obs_normalization=False,
       distribution_cfg={
         "class_name": "GaussianDistribution",
-        "init_std": 1.0,
+        "init_std": 0.8,
         "std_type": "scalar",
       },
     ),
