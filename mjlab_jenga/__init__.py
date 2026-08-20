@@ -68,3 +68,17 @@ register_mjlab_task(
     play_env_cfg=_incrand_v2.jenga_env_cfg(play=True),
     rl_cfg=_incrand_v2.jenga_ppo_runner_cfg(),
 )
+
+# Abort: v1 (no touch/yaw) + a policy-triggered abort action that ends the current
+# block's attempt early on a curriculum-ramped threshold, plus a tower_shift
+# observation so the decision has a risk signal to act on. Isolated single-variable
+# experiment vs v1 -- see Discord (Boris, 23.07.2026) on giving the policy an abort
+# option. Launch: train.py / play.py Mjlab-Jenga-IncompleteRandomAbort
+from mjlab_jenga import jenga_incomplete_random_abort_cfg as _incrand_abort  # noqa: E402
+
+register_mjlab_task(
+    task_id="Mjlab-Jenga-IncompleteRandomAbort",
+    env_cfg=_incrand_abort.jenga_env_cfg(),
+    play_env_cfg=_incrand_abort.jenga_env_cfg(play=True),
+    rl_cfg=_incrand_abort.jenga_ppo_runner_cfg(),
+)
