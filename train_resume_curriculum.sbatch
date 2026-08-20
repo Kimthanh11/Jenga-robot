@@ -36,6 +36,15 @@ CHECKPOINT="$2"
 ITERS="${3:-4000}"
 NUM_ENVS="${4:-256}"
 
+if [[ "${LOAD_RUN}" == *low_level_* ]]; then
+  echo "Refusing to resume a low-level stage with train_resume_curriculum.sbatch." >&2
+  echo "Use instead:" >&2
+  echo "  sbatch train_resume_low_level.sbatch <stage> ${LOAD_RUN} ${CHECKPOINT} ${ITERS} ${NUM_ENVS}" >&2
+  echo "Example:" >&2
+  echo "  sbatch train_resume_low_level.sbatch target ${LOAD_RUN} ${CHECKPOINT} ${ITERS} ${NUM_ENVS}" >&2
+  exit 2
+fi
+
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm
 
