@@ -66,6 +66,11 @@ def abort_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
     return abort_triggered(env).float()
 
 
+def tower_shift_obs(env: ManagerBasedRlEnv) -> torch.Tensor:
+    # base.tower_com_shift is (num_envs,); observation terms need a feature dim.
+    return base.tower_com_shift(env).unsqueeze(-1)
+
+
 @dataclass(kw_only=True)
 class AbortSignalActionCfg(ActionTermCfg):
     """A policy-controlled signal that drives no joint; terminations/rewards read it."""
@@ -105,10 +110,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     cfg = base._make_env_cfg()
 
     cfg.observations["actor"].terms["tower_shift"] = ObservationTermCfg(
-        func=base.tower_com_shift,
+        func=tower_shift_obs,
     )
     cfg.observations["critic"].terms["tower_shift"] = ObservationTermCfg(
-        func=base.tower_com_shift,
+        func=tower_shift_obs,
     )
 
     cfg.actions["abort"] = AbortSignalActionCfg(entity_name="hook")
