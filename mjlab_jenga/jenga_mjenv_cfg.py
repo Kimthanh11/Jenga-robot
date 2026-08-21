@@ -1435,10 +1435,11 @@ YAW_TARGET_LIMIT = 0.6
 ACTION_CLIP = 1.0
 HOOK_SLIDE_Y_TARGET_RANGE = (-0.13, 0.23)
 HOOK_SLIDE_Z_TARGET_RANGE = (-0.17, 0.13)
-PROGRESS_REWARD_WEIGHT = 2.0
+PROGRESS_REWARD_WEIGHT = 8.0
 SUCCESS_REWARD_WEIGHT = 10.0
 TOWER_INSTABILITY_REWARD_WEIGHT = -2.0
 TOWER_DAMAGE_REWARD_WEIGHT = -20.0
+TIMEOUT_REWARD_WEIGHT = -5.0
 STUCK_REWARD_WEIGHT = -0.005
 ACTION_RATE_REWARD_WEIGHT = -0.0005
 ACTION_MAGNITUDE_REWARD_WEIGHT = -0.00005
@@ -1660,7 +1661,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
             f"curriculum(success_dist={success_distance.item():.5f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_scale.item():.3f}, yaw_step_max={yaw_step_max.item():.5f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
-            f"reward_cfg(progress_total_max={PROGRESS_REWARD_WEIGHT:.2f}, success={SUCCESS_REWARD_WEIGHT:.2f}, instability_total_max={TOWER_INSTABILITY_REWARD_WEIGHT:.2f}, instability_grace={TOWER_INSTABILITY_GRACE_STEPS}, stuck_per_step={STUCK_REWARD_WEIGHT:.3f}, stuck_grace={STUCK_GRACE_STEPS}, damage={TOWER_DAMAGE_REWARD_WEIGHT:.2f}, dt_scaled=False)",
+            f"reward_cfg(progress_total_max={PROGRESS_REWARD_WEIGHT:.2f}, success={SUCCESS_REWARD_WEIGHT:.2f}, instability_total_max={TOWER_INSTABILITY_REWARD_WEIGHT:.2f}, instability_grace={TOWER_INSTABILITY_GRACE_STEPS}, stuck_per_step={STUCK_REWARD_WEIGHT:.3f}, stuck_grace={STUCK_GRACE_STEPS}, timeout={TIMEOUT_REWARD_WEIGHT:.2f}, damage={TOWER_DAMAGE_REWARD_WEIGHT:.2f}, dt_scaled=False)",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, extracted_count={int(extracted.sum().item())}/{env.num_envs}, safe_success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
             f"tower(com_shift_mean={tower_shift.mean().item():.5f}, max_block_xy_mean={tower_max_xy.mean().item():.5f}, max_block_z_mean={tower_max_z.mean().item():.5f}, max_block_rot_deg_mean={torch.rad2deg(tower_max_rotation).mean().item():.2f}, instability_mean={tower_instability.mean().item():.3f}, damage_count={int(tower_damaged.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
@@ -2245,6 +2246,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=tower_damage_signal,
             weight=TOWER_DAMAGE_REWARD_WEIGHT,
         ),
+        "timeout": RewardTermCfg(
+            func=time_out,
+            weight=TIMEOUT_REWARD_WEIGHT,
+        ),
         "debug_reward_signals": RewardTermCfg(
             func=debug_reward_signals,
             weight=1e-12,
@@ -2279,6 +2284,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "tower_damage_mean": MetricsTermCfg(
             func=tower_damage_signal,
             reduce="mean",
+        ),
+        "timeout_last": MetricsTermCfg(
+            func=time_out,
+            reduce="last",
         ),
         "tower_max_block_horizontal_shift_last": MetricsTermCfg(
             func=tower_max_block_horizontal_shift,
