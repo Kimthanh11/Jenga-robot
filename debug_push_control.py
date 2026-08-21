@@ -54,10 +54,12 @@ def main() -> None:
         max_force = 0.0
         max_progress = float("-inf")
         contact_steps = 0
+        total_reward = 0.0
 
         action[:, 0] = -1.0
         for _ in range(args.push_steps):
-            env.step(action)
+            _, reward, _, _, _ = env.step(action)
+            total_reward += float(reward.sum().item())
             force = cfg.hook_contact_force_norm(env)
             progress = cfg.block_progress(env)
             max_force = max(max_force, float(force.max().item()))
@@ -67,12 +69,14 @@ def main() -> None:
 
         action.zero_()
         for _ in range(args.stop_steps):
-            env.step(action)
+            _, reward, _, _, _ = env.step(action)
+            total_reward += float(reward.sum().item())
         stop_velocity = float(cfg.push_velocity_target(env).item())
 
         action[:, 0] = 1.0
         for _ in range(args.retreat_steps):
-            env.step(action)
+            _, reward, _, _, _ = env.step(action)
+            total_reward += float(reward.sum().item())
         retreat_velocity = float(cfg.push_velocity_target(env).item())
 
         push_ok = push_velocity < -0.02
@@ -89,6 +93,7 @@ def main() -> None:
             f"contact_steps={contact_steps}",
             f"max_force={max_force:.3f}",
             f"max_progress={max_progress:.5f}",
+            f"total_reward={total_reward:.4f}",
             f"passed={passed}",
             flush=True,
         )

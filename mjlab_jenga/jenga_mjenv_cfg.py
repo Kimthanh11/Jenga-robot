@@ -1419,8 +1419,6 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
-PERTURBATION_CURRICULUM_START = 1.0
-PERTURBATION_CURRICULUM_STEPS = 1
 SUCCESS_CURRICULUM_START = 0.75
 SUCCESS_CURRICULUM_END = 0.75
 SUCCESS_CURRICULUM_STEPS = 1
@@ -1437,6 +1435,18 @@ YAW_TARGET_LIMIT = 0.6
 ACTION_CLIP = 1.0
 HOOK_SLIDE_Y_TARGET_RANGE = (-0.13, 0.23)
 HOOK_SLIDE_Z_TARGET_RANGE = (-0.17, 0.13)
+PROGRESS_REWARD_WEIGHT = 2.0
+SUCCESS_REWARD_WEIGHT = 10.0
+TOWER_INSTABILITY_REWARD_WEIGHT = -2.0
+TOWER_DAMAGE_REWARD_WEIGHT = -20.0
+STUCK_REWARD_WEIGHT = -0.005
+ACTION_RATE_REWARD_WEIGHT = -0.0005
+ACTION_MAGNITUDE_REWARD_WEIGHT = -0.00005
+STUCK_CONTACT_FORCE_THRESHOLD = 2.0
+STUCK_BLOCK_SPEED_THRESHOLD = 0.002
+STUCK_GRACE_STEPS = 20
+TOWER_INSTABILITY_GRACE_STEPS = 10
+
 # Rewards
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
@@ -1469,20 +1479,35 @@ def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET
     return progress
 
 
-def tower_moderate_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
-    return tower_com_shift(env)
+def _normalized_limit_excess(
+    value: torch.Tensor,
+    safe_limit: float,
+    damage_limit: float,
+) -> torch.Tensor:
+    return torch.clamp(
+        (value - safe_limit) / (damage_limit - safe_limit),
+        min=0.0,
+        max=1.0,
+    )
 
 
-def tower_large_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
-    return tower_damage(env).float()
-
-
-def perturbation_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
-    progress = min(env.common_step_counter / PERTURBATION_CURRICULUM_STEPS, 1.0)
-    scale = PERTURBATION_CURRICULUM_START + (
-        1.0 - PERTURBATION_CURRICULUM_START
-    ) * progress
-    return torch.tensor(scale, device=env.device)
+def tower_instability_fraction(env: ManagerBasedRlEnv) -> torch.Tensor:
+    horizontal = _normalized_limit_excess(
+        tower_max_block_horizontal_shift(env),
+        TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT,
+        TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT,
+    )
+    vertical = _normalized_limit_excess(
+        tower_max_block_vertical_shift(env),
+        TOWER_SUCCESS_MAX_BLOCK_VERTICAL_SHIFT,
+        TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT,
+    )
+    rotation = _normalized_limit_excess(
+        tower_max_block_rotation(env),
+        TOWER_SUCCESS_MAX_BLOCK_ROTATION,
+        TOWER_DAMAGE_MAX_BLOCK_ROTATION,
+    )
+    return torch.maximum(torch.maximum(horizontal, vertical), rotation)
 
 
 def success_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -1529,18 +1554,6 @@ def success_done_distance(env: ManagerBasedRlEnv) -> torch.Tensor:
     return BLOCK_SIZE[1] * success_curriculum_scale(env)
 
 
-def progress_towards_success_distance_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """Dense reward for being closer to the configured extraction success distance."""
-    progress = block_progress(env)
-    target = success_done_distance(env)
-    progress_fraction = torch.clamp(progress / target, 0.0, 1.0)
-    return progress_fraction ** 2
-
-
-def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
-    return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
-
-
 def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.norm(env.action_manager.action, dim=-1)
 
@@ -1566,9 +1579,9 @@ def retreat_action_fraction(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 def stuck_contact_signal(env: ManagerBasedRlEnv) -> torch.Tensor:
     contact = hook_contact_found(env) > 0.0
-    force_high = hook_contact_force_norm(env) > 2.0
+    force_high = hook_contact_force_norm(env) > STUCK_CONTACT_FORCE_THRESHOLD
     extraction_speed = target_block_vel_in_task_frame(env)[:, 0]
-    nearly_stationary = torch.abs(extraction_speed) < 0.002
+    nearly_stationary = torch.abs(extraction_speed) < STUCK_BLOCK_SPEED_THRESHOLD
     return (contact & force_high & nearly_stationary).float()
 
 
@@ -1593,7 +1606,8 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         tower_max_xy = tower_max_block_horizontal_shift(env)
         tower_max_z = tower_max_block_vertical_shift(env)
         tower_max_rotation = tower_max_block_rotation(env)
-        tower_large = tower_large_perturbation(env)
+        tower_instability = tower_instability_fraction(env)
+        tower_damaged = tower_damage(env)
         contact_found = hook_contact_found(env)
         contact_force = hook_contact_force_in_task_frame(env)
         contact_force_norm = torch.linalg.vector_norm(contact_force, dim=-1)
@@ -1645,10 +1659,11 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         print(
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
-            f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_scale.item():.3f}, yaw_step_max={yaw_step_max.item():.5f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
+            f"curriculum(success_dist={success_distance.item():.5f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_scale.item():.3f}, yaw_step_max={yaw_step_max.item():.5f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
+            f"reward_cfg(progress_total_max={PROGRESS_REWARD_WEIGHT:.2f}, success={SUCCESS_REWARD_WEIGHT:.2f}, instability_total_max={TOWER_INSTABILITY_REWARD_WEIGHT:.2f}, instability_grace={TOWER_INSTABILITY_GRACE_STEPS}, stuck_per_step={STUCK_REWARD_WEIGHT:.3f}, stuck_grace={STUCK_GRACE_STEPS}, damage={TOWER_DAMAGE_REWARD_WEIGHT:.2f}, dt_scaled=False)",
             f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, extracted_count={int(extracted.sum().item())}/{env.num_envs}, safe_success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
-            f"tower(com_shift_mean={tower_shift.mean().item():.5f}, max_block_xy_mean={tower_max_xy.mean().item():.5f}, max_block_z_mean={tower_max_z.mean().item():.5f}, max_block_rot_deg_mean={torch.rad2deg(tower_max_rotation).mean().item():.2f}, damage_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
+            f"tower(com_shift_mean={tower_shift.mean().item():.5f}, max_block_xy_mean={tower_max_xy.mean().item():.5f}, max_block_z_mean={tower_max_z.mean().item():.5f}, max_block_rot_deg_mean={torch.rad2deg(tower_max_rotation).mean().item():.2f}, instability_mean={tower_instability.mean().item():.3f}, damage_count={int(tower_damaged.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
             f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, counts={selected_block_counts})",
             f"missing_patterns({missing_pattern_counts})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f}, x_vel_target={x_velocity_target.mean().item():.5f})",
@@ -1663,41 +1678,130 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.zeros(env.num_envs, device=env.device)
 
 
-class DeltaBlockProgressReward:
-    """Reward only new extraction progress since the previous environment step."""
+class NormalizedDeltaBlockProgressReward:
+    """Reward increases of the furthest normalized extraction progress."""
 
     def __init__(self, asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG):
         self.asset_cfg = asset_cfg
-        self.previous_progress: torch.Tensor | None = None
+        self.best_progress_fraction: torch.Tensor | None = None
         self.needs_init: torch.Tensor | None = None
 
     def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
-        current_progress = block_progress(env, self.asset_cfg)
+        success_distance = success_done_distance(env).clamp_min(1.0e-6)
+        current_fraction = torch.clamp(
+            block_progress(env, self.asset_cfg) / success_distance,
+            min=0.0,
+            max=1.0,
+        )
 
-        if self.previous_progress is None:
-            self.previous_progress = current_progress.clone()
-            self.needs_init = torch.zeros_like(current_progress, dtype=torch.bool)
-            return torch.zeros_like(current_progress)
+        if self.best_progress_fraction is None:
+            self.best_progress_fraction = current_fraction.clone()
+            self.needs_init = torch.zeros_like(current_fraction, dtype=torch.bool)
+            return torch.zeros_like(current_fraction)
 
         if self.needs_init is not None and torch.any(self.needs_init):
-            self.previous_progress[self.needs_init] = current_progress[self.needs_init]
+            self.best_progress_fraction[self.needs_init] = current_fraction[self.needs_init]
             self.needs_init[self.needs_init] = False
 
-        delta_progress = current_progress - self.previous_progress
-        self.previous_progress = current_progress.clone()
-
-        return torch.clamp(delta_progress, min=0.0)
+        new_progress = torch.clamp(
+            current_fraction - self.best_progress_fraction,
+            min=0.0,
+        )
+        self.best_progress_fraction = torch.maximum(
+            self.best_progress_fraction,
+            current_fraction,
+        )
+        return new_progress
 
     def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
-        if self.previous_progress is None:
+        if self.best_progress_fraction is None:
             return
 
         if self.needs_init is None:
-            self.needs_init = torch.zeros_like(self.previous_progress, dtype=torch.bool)
+            self.needs_init = torch.zeros_like(
+                self.best_progress_fraction,
+                dtype=torch.bool,
+            )
 
         if env_ids is None:
             env_ids = slice(None)
         self.needs_init[env_ids] = True
+
+
+class SustainedStuckPenalty:
+    """Activate after forceful contact without block motion persists."""
+
+    def __init__(self, grace_steps: int = STUCK_GRACE_STEPS):
+        self.grace_steps = grace_steps
+        self.consecutive_steps: torch.Tensor | None = None
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        stuck = stuck_contact_signal(env) > 0.0
+        if self.consecutive_steps is None:
+            self.consecutive_steps = torch.zeros(
+                env.num_envs,
+                device=env.device,
+                dtype=torch.long,
+            )
+
+        self.consecutive_steps = torch.where(
+            stuck,
+            self.consecutive_steps + 1,
+            torch.zeros_like(self.consecutive_steps),
+        )
+        return (self.consecutive_steps > self.grace_steps).float()
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if self.consecutive_steps is None:
+            return
+        if env_ids is None:
+            env_ids = slice(None)
+        self.consecutive_steps[env_ids] = 0
+
+
+class NewTowerInstabilityPenalty:
+    """Penalize only increases in peak instability after passive settling."""
+
+    def __init__(self, grace_steps: int = TOWER_INSTABILITY_GRACE_STEPS):
+        self.grace_steps = grace_steps
+        self.episode_steps: torch.Tensor | None = None
+        self.peak_instability: torch.Tensor | None = None
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        if self.episode_steps is None:
+            self.episode_steps = torch.zeros(
+                env.num_envs,
+                device=env.device,
+                dtype=torch.long,
+            )
+            self.peak_instability = torch.zeros(env.num_envs, device=env.device)
+
+        self.episode_steps += 1
+        current = tower_instability_fraction(env)
+        baseline = self.episode_steps == self.grace_steps + 1
+        active = self.episode_steps > self.grace_steps + 1
+        assert self.peak_instability is not None
+        self.peak_instability = torch.where(
+            baseline,
+            current,
+            self.peak_instability,
+        )
+        new_instability = torch.clamp(current - self.peak_instability, min=0.0)
+        self.peak_instability = torch.where(
+            active,
+            torch.maximum(self.peak_instability, current),
+            self.peak_instability,
+        )
+        return torch.where(active, new_instability, torch.zeros_like(current))
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if self.episode_steps is None:
+            return
+        if env_ids is None:
+            env_ids = slice(None)
+        self.episode_steps[env_ids] = 0
+        if self.peak_instability is not None:
+            self.peak_instability[env_ids] = 0.0
 
 
 
@@ -1730,6 +1834,10 @@ def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
         | (tower_max_block_vertical_shift(env) > TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT)
         | (tower_max_block_rotation(env) > TOWER_DAMAGE_MAX_BLOCK_ROTATION)
     )
+
+
+def tower_damage_signal(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_damage(env).float()
 
 
 def block_vector_to_world(
@@ -2109,33 +2217,33 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
 
     rewards = {
-        "delta_block_progress": RewardTermCfg(
-            func=DeltaBlockProgressReward(),
-            weight=120.0,
-        ),
-        "progress_towards_success_distance": RewardTermCfg(
-            func=progress_towards_success_distance_reward,
-            weight=2.0,
+        "normalized_new_progress": RewardTermCfg(
+            func=NormalizedDeltaBlockProgressReward(),
+            weight=PROGRESS_REWARD_WEIGHT,
         ),
         "action_rate": RewardTermCfg(
             func=action_rate_l2,
-            weight=-0.0002,
+            weight=ACTION_RATE_REWARD_WEIGHT,
         ),
         "action_magnitude": RewardTermCfg(
             func=action_magnitude_l2,
-            weight=-0.00001,
+            weight=ACTION_MAGNITUDE_REWARD_WEIGHT,
+        ),
+        "sustained_stuck": RewardTermCfg(
+            func=SustainedStuckPenalty(),
+            weight=STUCK_REWARD_WEIGHT,
         ),
         "successful_extract": RewardTermCfg(
             func=success_block_reward,
-            weight=900.0,
+            weight=SUCCESS_REWARD_WEIGHT,
         ),
-        "tower_moderate_pertub" : RewardTermCfg(
-            func=tower_moderate_perturbation_curriculum,
-            weight=-0.2
+        "tower_instability": RewardTermCfg(
+            func=NewTowerInstabilityPenalty(),
+            weight=TOWER_INSTABILITY_REWARD_WEIGHT,
         ),
-        "tower_large_pertub" : RewardTermCfg(
-            func=tower_large_perturbation,
-            weight=-100.0
+        "tower_damage": RewardTermCfg(
+            func=tower_damage_signal,
+            weight=TOWER_DAMAGE_REWARD_WEIGHT,
         ),
         "debug_reward_signals": RewardTermCfg(
             func=debug_reward_signals,
@@ -2152,8 +2260,8 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=target_extraction_reached,
             reduce="last",
         ),
-        "delta_block_progress_mean": MetricsTermCfg(
-            func=DeltaBlockProgressReward(),
+        "normalized_new_progress_mean": MetricsTermCfg(
+            func=NormalizedDeltaBlockProgressReward(),
             reduce="mean",
         ),
         "success_last": MetricsTermCfg(
@@ -2164,8 +2272,12 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=tower_com_shift,
             reduce="last",
         ),
-        "tower_large_perturb_mean": MetricsTermCfg(
-            func=tower_large_perturbation,
+        "tower_instability_mean": MetricsTermCfg(
+            func=tower_instability_fraction,
+            reduce="mean",
+        ),
+        "tower_damage_mean": MetricsTermCfg(
+            func=tower_damage_signal,
             reduce="mean",
         ),
         "tower_max_block_horizontal_shift_last": MetricsTermCfg(
@@ -2249,6 +2361,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         actions=actions,
         events=events,
         rewards=rewards,
+        scale_rewards_by_dt=False,
         metrics=metrics,
         terminations=terminations,
         commands=commands,
@@ -2400,6 +2513,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       max_grad_norm=1.0,
     ),
     experiment_name="jenga",
+    clip_actions=1.0,
     save_interval=500,
     num_steps_per_env=32,
     max_iterations=10000,
