@@ -19,12 +19,7 @@ from mjlab.envs.mdp import (
   time_out,
 )
 from mjlab.envs.mdp.dr import geom_friction, pseudo_inertia
-from mjlab.envs.mdp.actions import (
-    JointEffortActionCfg,
-    JointVelocityActionCfg,
-    RelativeJointPositionActionCfg,
-)
-from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
+from mjlab.envs.mdp.rewards import action_rate_l2
 from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
 from mjlab.managers.event_manager import EventTermCfg, RecomputeLevel, requires_model_fields
@@ -42,6 +37,7 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 from mjlab.scene import SceneCfg
+from mjlab.sensor import ContactMatch, ContactSensor, ContactSensorCfg
 from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.viewer import ViewerConfig
 
@@ -61,34 +57,48 @@ BLOCK_DENSITY = 650.0
 BLOCK_DENSITY_RANDOMIZATION = 0.0
 BLOCK_SIZE_RANDOMIZATION = (0.0, 0.0, 0.0)
 RESET_DENSITY_RANDOMIZATION = 0.15
-RESET_FRICTION_SLIDING_RANGE = (0.30, 0.50)
-RESET_FRICTION_TORSIONAL_RANGE = (0.015, 0.06)
+RESET_FRICTION_SLIDING_RANGE = (0.28, 0.48)
+RESET_FRICTION_TORSIONAL_RANGE = (0.012, 0.055)
 RESET_FRICTION_ROLLING_RANGE = (0.001, 0.001)
+TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT = 0.012
+TOWER_SUCCESS_MAX_BLOCK_VERTICAL_SHIFT = 0.008
+TOWER_SUCCESS_MAX_BLOCK_ROTATION = math.radians(8.0)
+TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT = 0.025
+TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT = 0.015
+TOWER_DAMAGE_MAX_BLOCK_ROTATION = math.radians(15.0)
 CONTACT_X_LIMIT = 0.01
 CONTACT_Y_LIMIT = BLOCK_HALF_SIZE[1]
 CONTACT_Z_LIMIT = 0.006
 CONTACT_FACE_Y = -CONTACT_Y_LIMIT
 PUSH_X_VELOCITY_SCALE = 0.03
 PUSH_X_VELOCITY_CLIP = (-0.05, 0.05)
+PUSH_ACTION_DEADZONE = 0.08
+PUSH_VELOCITY_CHANGE_PER_STEP = 0.006
+HOOK_CONTACT_SENSOR_NAME = "hook_contact"
+CONTACT_FORCE_OBS_NORMALIZER = 5.0
+CONTACT_FORCE_OBS_CLIP = 2.0
 
 SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
 LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 
-MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 170_000
-MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 120_000
-MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
-MISSING_BLOCK_DOUBLE_BEGIN_STEP = 520_000
-MISSING_BLOCK_TRIPLE_BEGIN_STEP = 760_000
+MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 600_000
+MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.05
+MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.35
+MISSING_BLOCK_DOUBLE_BEGIN_STEP = 250_000
+MISSING_BLOCK_TRIPLE_BEGIN_STEP = 500_000
 FORCED_MISSING_BLOCK_COUNT: int | None = None
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
 MISSING_BLOCK_PARK_SPACING = 0.2
-RANDOM_TARGET_BLOCK_BEGIN_STEP = 350_000
-RANDOM_TARGET_BLOCK_RAMP_STEPS = 240_000
-RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.0
-RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.15
-RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 620_000
-RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 240_000
+RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
+RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
+RANDOM_TARGET_BLOCK_START_PROBABILITY = 1.0
+RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
+RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 0
+RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 1
+RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
+RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
 FIXED_TARGET_BLOCK_NAME = "b6_1"
 RANDOM_TARGET_BLOCK_NAMES = (
     "b1_1",
@@ -263,7 +273,14 @@ def random_target_with_missing_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
         )
         / RANDOM_TARGET_WITH_MISSING_RAMP_STEPS
     )
-    return torch.tensor(min(progress, 1.0), device=env.device)
+    probability = RANDOM_TARGET_WITH_MISSING_START_PROBABILITY + min(
+        progress,
+        1.0,
+    ) * (
+        RANDOM_TARGET_WITH_MISSING_END_PROBABILITY
+        - RANDOM_TARGET_WITH_MISSING_START_PROBABILITY
+    )
+    return torch.tensor(probability, device=env.device)
 
 
 def _rz_quat(angle_rad: float) -> tuple[float, float, float, float]:
@@ -305,6 +322,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
                 "layer": layer,
                 "slot": slot,
                 "start_pos": (cx, cy, cz),
+                "start_quat": block_info["quat"],
                 "extraction_w": extraction_w,
                 "contact_face_y": contact_face_y,
                 "task_quat": task_quat,
@@ -348,6 +366,11 @@ class TargetBlockCommand(CommandTerm):
 
         self._start_pos = torch.tensor(
             [entry["start_pos"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._start_quat = torch.tensor(
+            [entry["start_quat"] for entry in entries],
             dtype=torch.float32,
             device=self.device,
         )
@@ -435,6 +458,18 @@ class TargetBlockCommand(CommandTerm):
         self._cur_movement_rel = torch.zeros(self.num_envs, 3, device=self.device)
         self._cur_progress = torch.zeros(self.num_envs, device=self.device)
         self._cur_tower_shift = torch.zeros(self.num_envs, device=self.device)
+        self._cur_max_block_horizontal_shift = torch.zeros(
+            self.num_envs,
+            device=self.device,
+        )
+        self._cur_max_block_vertical_shift = torch.zeros(
+            self.num_envs,
+            device=self.device,
+        )
+        self._cur_max_block_rotation = torch.zeros(
+            self.num_envs,
+            device=self.device,
+        )
 
         self.metrics["selected_block"] = self.selected_block_idx.float()
         self.metrics["random_target"] = self.selected_is_random.float()
@@ -482,6 +517,15 @@ class TargetBlockCommand(CommandTerm):
 
     def selected_tower_shift(self) -> torch.Tensor:
         return self._cur_tower_shift
+
+    def selected_max_block_horizontal_shift(self) -> torch.Tensor:
+        return self._cur_max_block_horizontal_shift
+
+    def selected_max_block_vertical_shift(self) -> torch.Tensor:
+        return self._cur_max_block_vertical_shift
+
+    def selected_max_block_rotation(self) -> torch.Tensor:
+        return self._cur_max_block_rotation
 
     def selected_extraction_w(self) -> torch.Tensor:
         return self._extraction[self.selected_block_idx]
@@ -556,6 +600,32 @@ class TargetBlockCommand(CommandTerm):
             self._start_pos.unsqueeze(0) * start_weights
         ).sum(dim=1) / start_weights.sum(dim=1).clamp_min(1.0)
         self._cur_tower_shift = torch.norm((current_com - start_com)[:, :2], dim=-1)
+
+        stability_mask = present_for_com.transpose(0, 1)
+        position_delta = all_pos - self._start_pos.unsqueeze(1)
+        horizontal_shift = torch.norm(position_delta[:, :, :2], dim=-1)
+        vertical_shift = torch.abs(position_delta[:, :, 2])
+        current_quat = all_pose[:, :, 3:7]
+        quat_dot = torch.abs(
+            torch.sum(current_quat * self._start_quat.unsqueeze(1), dim=-1)
+        ).clamp(max=1.0)
+        rotation = 2.0 * torch.acos(quat_dot)
+        zeros = torch.zeros_like(horizontal_shift)
+        self._cur_max_block_horizontal_shift = torch.where(
+            stability_mask,
+            horizontal_shift,
+            zeros,
+        ).max(dim=0).values
+        self._cur_max_block_vertical_shift = torch.where(
+            stability_mask,
+            vertical_shift,
+            zeros,
+        ).max(dim=0).values
+        self._cur_max_block_rotation = torch.where(
+            stability_mask,
+            rotation,
+            zeros,
+        ).max(dim=0).values
 
         self.metrics["selected_block"] = selected.float()
         self.metrics["random_target"] = self.selected_is_random.float()
@@ -685,10 +755,11 @@ def missing_block_randomization_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
         / MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS,
         1.0,
     )
-    return torch.tensor(
-        progress * MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY,
-        device=env.device,
+    probability = MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY + progress * (
+        MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY
+        - MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY
     )
+    return torch.tensor(probability, device=env.device)
 
 
 def missing_block_max_count(env: ManagerBasedRlEnv) -> int:
@@ -1132,6 +1203,35 @@ def tower_com_shift(
     return horizontal_shift
 
 
+def tower_max_block_horizontal_shift(env: ManagerBasedRlEnv) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None:
+        return cmd.selected_max_block_horizontal_shift()
+    return tower_com_shift(env)
+
+
+def tower_max_block_vertical_shift(env: ManagerBasedRlEnv) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None:
+        return cmd.selected_max_block_vertical_shift()
+    return torch.zeros(env.num_envs, device=env.device)
+
+
+def tower_max_block_rotation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    cmd = _target_command_or_none(env)
+    if cmd is not None:
+        return cmd.selected_max_block_rotation()
+    return torch.zeros(env.num_envs, device=env.device)
+
+
+def tower_stable_for_success(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return (
+        (tower_max_block_horizontal_shift(env) < TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT)
+        & (tower_max_block_vertical_shift(env) < TOWER_SUCCESS_MAX_BLOCK_VERTICAL_SHIFT)
+        & (tower_max_block_rotation(env) < TOWER_SUCCESS_MAX_BLOCK_ROTATION)
+    )
+
+
 #convert gripper to local coordinate frame of the block
 def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     """
@@ -1236,6 +1336,58 @@ def target_block_vel_in_task_frame(
     return quat_apply_inverse(task_quat_world, vel_world)
 
 
+def _hook_contact_sensor(env: ManagerBasedRlEnv) -> ContactSensor:
+    sensor = env.scene[HOOK_CONTACT_SENSOR_NAME]
+    if not isinstance(sensor, ContactSensor):
+        raise TypeError(f"{HOOK_CONTACT_SENSOR_NAME} is not a ContactSensor")
+    return sensor
+
+
+def hook_contact_force_world(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Strongest net hook contact force observed during the current policy step."""
+    data = _hook_contact_sensor(env).data
+    if data.force is None:
+        return torch.zeros(env.num_envs, 3, device=env.device)
+
+    if data.force_history is None:
+        return data.force[:, 0, :]
+
+    history = data.force_history[:, 0, :, :]
+    strongest_idx = torch.linalg.vector_norm(history, dim=-1).argmax(dim=1)
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    return history[env_ids, strongest_idx]
+
+
+def hook_contact_force_in_task_frame(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return quat_apply_inverse(target_task_quat_w(env), hook_contact_force_world(env))
+
+
+def hook_contact_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Normalized task-frame force plus a binary contact flag."""
+    force = torch.clamp(
+        hook_contact_force_in_task_frame(env) / CONTACT_FORCE_OBS_NORMALIZER,
+        -CONTACT_FORCE_OBS_CLIP,
+        CONTACT_FORCE_OBS_CLIP,
+    )
+    found = hook_contact_found(env).unsqueeze(-1).to(force.dtype)
+    return torch.cat((force, found), dim=-1)
+
+
+def hook_contact_force_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return torch.linalg.vector_norm(hook_contact_force_world(env), dim=-1)
+
+
+def hook_contact_found(env: ManagerBasedRlEnv) -> torch.Tensor:
+    data = _hook_contact_sensor(env).data
+    current = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    if data.found is not None:
+        current = (data.found > 0).any(dim=1)
+    if data.force_history is None:
+        return current.float()
+    history = torch.linalg.vector_norm(data.force_history, dim=-1) > 1.0e-8
+    return (current | history.any(dim=(1, 2))).float()
+
+
 def hook_joint_pos_relative_to_target_home(env: ManagerBasedRlEnv) -> torch.Tensor:
     hook_joint_pos = hook_joint_pos_ordered(env)
     cmd = _target_command_or_none(env)
@@ -1267,8 +1419,8 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
-PERTURBATION_CURRICULUM_START = 0.1
-PERTURBATION_CURRICULUM_STEPS = 100_000
+PERTURBATION_CURRICULUM_START = 1.0
+PERTURBATION_CURRICULUM_STEPS = 1
 SUCCESS_CURRICULUM_START = 0.75
 SUCCESS_CURRICULUM_END = 0.75
 SUCCESS_CURRICULUM_STEPS = 1
@@ -1276,10 +1428,10 @@ TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
 TOUCH_CURRICULUM_BEGIN_STEP = 0
 TOUCH_CURRICULUM_STEPS = 1
-YAW_CURRICULUM_START = 0.0
+YAW_CURRICULUM_START = 0.10
 YAW_CURRICULUM_END = 0.6
-YAW_CURRICULUM_BEGIN_STEP = 220_000
-YAW_CURRICULUM_STEPS = 260_000
+YAW_CURRICULUM_BEGIN_STEP = 0
+YAW_CURRICULUM_STEPS = 600_000
 YAW_ACTION_SCALE = 0.06
 YAW_TARGET_LIMIT = 0.6
 ACTION_CLIP = 1.0
@@ -1322,8 +1474,7 @@ def tower_moderate_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def tower_large_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
-    shift = tower_com_shift(env)
-    return (shift > 0.02).float()
+    return tower_damage(env).float()
 
 
 def perturbation_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -1390,16 +1541,35 @@ def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tens
     return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
 
 
-def tower_large_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
-    return tower_large_perturbation(env) * perturbation_curriculum_scale(env)
-
-
 def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.norm(env.action_manager.action, dim=-1)
 
 
 def action_magnitude_l2(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.sum(torch.square(env.action_manager.action), dim=-1)
+
+
+def push_velocity_target(env: ManagerBasedRlEnv) -> torch.Tensor:
+    term = env.action_manager.get_term("push_stop_retreat")
+    if not isinstance(term, PushStopRetreatAction):
+        raise TypeError("push_stop_retreat has an unexpected action term type")
+    return term.processed_velocity.squeeze(-1)
+
+
+def stop_action_fraction(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return (torch.abs(env.action_manager.action[:, 0]) <= PUSH_ACTION_DEADZONE).float()
+
+
+def retreat_action_fraction(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return (env.action_manager.action[:, 0] > PUSH_ACTION_DEADZONE).float()
+
+
+def stuck_contact_signal(env: ManagerBasedRlEnv) -> torch.Tensor:
+    contact = hook_contact_found(env) > 0.0
+    force_high = hook_contact_force_norm(env) > 2.0
+    extraction_speed = target_block_vel_in_task_frame(env)[:, 0]
+    nearly_stationary = torch.abs(extraction_speed) < 0.002
+    return (contact & force_high & nearly_stationary).float()
 
 
 def hook_x_position(
@@ -1416,10 +1586,18 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         hook_joint_pos = hook_joint_pos_ordered(env)
         movement_rel = target_block_relative_movement(env)
         progress = block_progress(env)
+        extracted = target_extraction_reached(env)
         success = success_block_extract(env)
         success_distance = success_done_distance(env)
         tower_shift = tower_com_shift(env)
+        tower_max_xy = tower_max_block_horizontal_shift(env)
+        tower_max_z = tower_max_block_vertical_shift(env)
+        tower_max_rotation = tower_max_block_rotation(env)
         tower_large = tower_large_perturbation(env)
+        contact_found = hook_contact_found(env)
+        contact_force = hook_contact_force_in_task_frame(env)
+        contact_force_norm = torch.linalg.vector_norm(contact_force, dim=-1)
+        stuck = stuck_contact_signal(env)
         hook_x = hook_x_position(env)
         hook_tip_block = hook_tip_pos_in_block_frame(env)
         touch_raw = torch.clamp(action[:, 1:3], -ACTION_CLIP, ACTION_CLIP)
@@ -1436,11 +1614,7 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
         )
         roundtrip_error = contact_roundtrip - contact_block
         tip_contact_error_block = hook_tip_block - contact_block
-        x_velocity_target = torch.clamp(
-            action[:, 0] * PUSH_X_VELOCITY_SCALE,
-            PUSH_X_VELOCITY_CLIP[0],
-            PUSH_X_VELOCITY_CLIP[1],
-        )
+        x_velocity_target = push_velocity_target(env)
         hook_x_joint = hook_joint_pos[:, 0]
         missing_mask = getattr(env, "_jenga_missing_block_mask", None)
         if missing_mask is None:
@@ -1472,12 +1646,13 @@ def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
             "DEBUG_REWARD",
             f"step={env.common_step_counter}",
             f"curriculum(success_dist={success_distance.item():.5f}, perturb={perturbation_curriculum_scale(env).item():.3f}, touch={touch_curriculum_scale(env).item():.3f}, yaw={yaw_scale.item():.3f}, yaw_step_max={yaw_step_max.item():.5f}, missing={missing_block_randomization_scale(env).item():.3f}, missing_max={missing_block_max_count(env)}, random_target={random_target_block_scale(env).item():.3f}, random_missing={random_target_with_missing_scale(env).item():.3f})",
-            f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, success_count={int(success.sum().item())}/{env.num_envs})",
+            f"progress(mean={progress.mean().item():.5f}, min={progress.min().item():.5f}, max={progress.max().item():.5f}, extracted_count={int(extracted.sum().item())}/{env.num_envs}, safe_success_count={int(success.sum().item())}/{env.num_envs})",
             f"movement(mean_xyz=({movement_rel[:, 0].mean().item():.5f},{movement_rel[:, 1].mean().item():.5f},{movement_rel[:, 2].mean().item():.5f}))",
-            f"tower(shift_mean={tower_shift.mean().item():.5f}, large_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
+            f"tower(com_shift_mean={tower_shift.mean().item():.5f}, max_block_xy_mean={tower_max_xy.mean().item():.5f}, max_block_z_mean={tower_max_z.mean().item():.5f}, max_block_rot_deg_mean={torch.rad2deg(tower_max_rotation).mean().item():.2f}, damage_count={int(tower_large.sum().item())}/{env.num_envs}, missing_envs={missing_env_count}/{env.num_envs}, missing_blocks={missing_block_count})",
             f"target(random_envs={random_target_env_count}/{env.num_envs}, random_missing_envs={random_missing_env_count}/{env.num_envs}, counts={selected_block_counts})",
             f"missing_patterns({missing_pattern_counts})",
             f"action(mean_xyzyaw=({action[:, 0].mean().item():.5f},{action[:, 1].mean().item():.5f},{action[:, 2].mean().item():.5f},{action[:, 3].mean().item():.5f}), norm={action_norm(env).mean().item():.5f}, x_vel_target={x_velocity_target.mean().item():.5f})",
+            f"contact_sensor(found={int(contact_found.sum().item())}/{env.num_envs}, force_task_mean=({contact_force[:, 0].mean().item():.3f},{contact_force[:, 1].mean().item():.3f},{contact_force[:, 2].mean().item():.3f}), force_norm_mean={contact_force_norm.mean().item():.3f}, force_norm_max={contact_force_norm.max().item():.3f}, stuck={int(stuck.sum().item())}/{env.num_envs})",
             f"contact(desired_block_xz=({contact_block[:, 0].mean().item():.5f},{contact_block[:, 2].mean().item():.5f}), face_y={contact_block[:, 1].mean().item():.5f}, raw_xz=({touch_raw[:, 0].mean().item():.5f},{touch_raw[:, 1].mean().item():.5f}))",
             f"tracking(tip_block_yz=({hook_tip_block[:, 1].mean().item():.5f},{hook_tip_block[:, 2].mean().item():.5f}), err_yz=({tip_contact_error_block[:, 1].mean().item():.5f},{tip_contact_error_block[:, 2].mean().item():.5f}), target_yz=({touch_target[:, 0].mean().item():.5f},{touch_target[:, 1].mean().item():.5f}))",
             f"transform(roundtrip_err={torch.norm(roundtrip_error, dim=-1).mean().item():.8f})",
@@ -1536,9 +1711,13 @@ def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
     ref_block_state_mean = (ref1_block_pos + ref2_block_pos) / 2
     return ref_block_state_mean
 
-def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
+def target_extraction_reached(env: ManagerBasedRlEnv) -> torch.Tensor:
     progress = block_progress(env)
     return progress > success_done_distance(env)
+
+
+def success_block_extract(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return target_extraction_reached(env) & tower_stable_for_success(env)
 
 
 def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
@@ -1546,10 +1725,11 @@ def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
-    ref_pos = get_block_ref_pos(env)
-    movement = ref_pos - _START_REF_POS.to(ref_pos.device)
-    horizontal_movement = torch.norm(movement[:, :2], dim=-1)
-    return horizontal_movement > 0.06
+    return (
+        (tower_max_block_horizontal_shift(env) > TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT)
+        | (tower_max_block_vertical_shift(env) > TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT)
+        | (tower_max_block_rotation(env) > TOWER_DAMAGE_MAX_BLOCK_ROTATION)
+    )
 
 
 def block_vector_to_world(
@@ -1600,6 +1780,75 @@ def hook_slide_targets_for_tip_world(
     slide_z = rel[:, 2]
 
     return torch.stack((slide, slide_y, slide_z), dim=-1)
+
+
+@dataclass(kw_only=True)
+class PushStopRetreatActionCfg(ActionTermCfg):
+    """Signed velocity command with explicit push, stop, and retreat regions."""
+
+    push_speed: float = PUSH_X_VELOCITY_SCALE
+    retreat_speed: float = PUSH_X_VELOCITY_CLIP[1]
+    deadzone: float = PUSH_ACTION_DEADZONE
+    max_velocity_change: float = PUSH_VELOCITY_CHANGE_PER_STEP
+
+    def build(self, env: ManagerBasedRlEnv) -> PushStopRetreatAction:
+        return PushStopRetreatAction(self, env)
+
+
+class PushStopRetreatAction(ActionTerm):
+    cfg: PushStopRetreatActionCfg
+
+    def __init__(self, cfg: PushStopRetreatActionCfg, env: ManagerBasedRlEnv):
+        super().__init__(cfg=cfg, env=env)
+        joint_ids, _ = self._entity.find_joints(("hook_slide",), preserve_order=True)
+        self._target_ids = torch.tensor(joint_ids, device=self.device, dtype=torch.long)
+        self._raw_actions = torch.zeros(self.num_envs, 1, device=self.device)
+        self._processed_velocity = torch.zeros_like(self._raw_actions)
+
+    @property
+    def action_dim(self) -> int:
+        return 1
+
+    @property
+    def raw_action(self) -> torch.Tensor:
+        return self._raw_actions
+
+    @property
+    def processed_velocity(self) -> torch.Tensor:
+        return self._processed_velocity
+
+    def process_actions(self, actions: torch.Tensor) -> None:
+        self._raw_actions[:] = torch.clamp(actions, -ACTION_CLIP, ACTION_CLIP)
+        magnitude = torch.clamp(
+            (torch.abs(self._raw_actions) - self.cfg.deadzone)
+            / (1.0 - self.cfg.deadzone),
+            0.0,
+            1.0,
+        )
+        speed = torch.where(
+            self._raw_actions < 0.0,
+            torch.full_like(self._raw_actions, self.cfg.push_speed),
+            torch.full_like(self._raw_actions, self.cfg.retreat_speed),
+        )
+        desired = torch.sign(self._raw_actions) * magnitude * speed
+        velocity_delta = torch.clamp(
+            desired - self._processed_velocity,
+            -self.cfg.max_velocity_change,
+            self.cfg.max_velocity_change,
+        )
+        self._processed_velocity += velocity_delta
+
+    def apply_actions(self) -> None:
+        self._entity.set_joint_velocity_target(
+            self._processed_velocity,
+            joint_ids=self._target_ids,
+        )
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        self._raw_actions[env_ids] = 0.0
+        self._processed_velocity[env_ids] = 0.0
 
 
 def block_contact_to_hook_yz_targets(
@@ -1784,11 +2033,10 @@ class CurriculumYawAction(ActionTerm):
         self._processed_targets[env_ids] = 0.0
 
 
-# Environment conifg
+# Environment configuration
 
 
 def _make_env_cfg() -> ManagerBasedRlEnvCfg:
-#observations actor + critic
     actor_terms = {
         "pusher_pos": ObservationTermCfg(
             func=joint_pos_rel,
@@ -1813,6 +2061,9 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "target_task_velocity": ObservationTermCfg(
             func=target_block_vel_in_task_frame,
         ),
+        "hook_contact": ObservationTermCfg(
+            func=hook_contact_observation,
+        ),
     }
 
     critic_terms = {
@@ -1820,10 +2071,6 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         "block_all_pos": ObservationTermCfg(
             func=all_block_pos,
         ),
-        #"block_all_vel": ObservationTermCfg(
-         #   func=target_block_vel,
-          #  params={"asset_cfg": _ALL_BLOCK_CFGS},
-        #),
     }
 
 
@@ -1833,15 +2080,11 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     }
 
 
-    #TODO Maybe swap effort (aka force) for velocity
     actions : dict[str, ActionTermCfg] = {
-        "x_velocity": JointVelocityActionCfg(
+        "push_stop_retreat": PushStopRetreatActionCfg(
             entity_name="hook",
-            actuator_names=("hook_slide",),
-            scale=PUSH_X_VELOCITY_SCALE,
-            clip={"hook_slide": PUSH_X_VELOCITY_CLIP},
         ),
-        "block_local_touch": BlockLocalHookYZActionCfg( #yields 2 actions
+        "block_local_touch": BlockLocalHookYZActionCfg(
             entity_name="hook",
             scale=(CONTACT_X_LIMIT, CONTACT_Z_LIMIT),
             asset_cfg=_TARGET_BLOCK_CFG,
@@ -1874,11 +2117,6 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=progress_towards_success_distance_reward,
             weight=2.0,
         ),
-        # "torque_penalty": RewardTermCfg(
-        #     func=joint_torques_l2,
-        #     weight=-0.01,
-        #     params={"asset_cfg": SceneEntityCfg("hook", joint_names=("hook_slide",))},
-        # ),
         "action_rate": RewardTermCfg(
             func=action_rate_l2,
             weight=-0.0002,
@@ -1896,7 +2134,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             weight=-0.2
         ),
         "tower_large_pertub" : RewardTermCfg(
-            func=tower_large_perturbation_curriculum,
+            func=tower_large_perturbation,
             weight=-100.0
         ),
         "debug_reward_signals": RewardTermCfg(
@@ -1908,6 +2146,10 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     metrics = {
         "block_progress_last": MetricsTermCfg(
             func=block_progress,
+            reduce="last",
+        ),
+        "extraction_reached_last": MetricsTermCfg(
+            func=target_extraction_reached,
             reduce="last",
         ),
         "delta_block_progress_mean": MetricsTermCfg(
@@ -1926,8 +2168,40 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=tower_large_perturbation,
             reduce="mean",
         ),
+        "tower_max_block_horizontal_shift_last": MetricsTermCfg(
+            func=tower_max_block_horizontal_shift,
+            reduce="last",
+        ),
+        "tower_max_block_vertical_shift_last": MetricsTermCfg(
+            func=tower_max_block_vertical_shift,
+            reduce="last",
+        ),
+        "tower_max_block_rotation_last": MetricsTermCfg(
+            func=tower_max_block_rotation,
+            reduce="last",
+        ),
         "action_norm_mean": MetricsTermCfg(
             func=action_norm,
+            reduce="mean",
+        ),
+        "hook_contact_force_mean": MetricsTermCfg(
+            func=hook_contact_force_norm,
+            reduce="mean",
+        ),
+        "hook_contact_found_mean": MetricsTermCfg(
+            func=hook_contact_found,
+            reduce="mean",
+        ),
+        "stuck_contact_mean": MetricsTermCfg(
+            func=stuck_contact_signal,
+            reduce="mean",
+        ),
+        "stop_action_mean": MetricsTermCfg(
+            func=stop_action_fraction,
+            reduce="mean",
+        ),
+        "retreat_action_mean": MetricsTermCfg(
+            func=retreat_action_fraction,
             reduce="mean",
         ),
         "hook_x_position_last": MetricsTermCfg(
@@ -1939,7 +2213,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
     terminations = {
         "success": TerminationTermCfg(func=success_block_extract),
-        #"tower_damage": TerminationTermCfg(func=tower_damage),
+        "tower_damage": TerminationTermCfg(func=tower_damage),
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
     }
 
@@ -1954,10 +2228,23 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         scene=SceneCfg(
             terrain=TerrainEntityCfg(terrain_type="plane"),
             entities=_build_entities(),
+            sensors=(
+                ContactSensorCfg(
+                    name=HOOK_CONTACT_SENSOR_NAME,
+                    primary=ContactMatch(
+                        mode="subtree",
+                        pattern="hook_tool",
+                        entity="hook",
+                    ),
+                    fields=("found", "force"),
+                    reduce="netforce",
+                    num_slots=1,
+                    history_length=5,
+                ),
+            ),
             num_envs=512,
             env_spacing=4.0,
         ),
-        #scale_rewards_by_dt=False,
         observations=observations,
         actions=actions,
         events=events,
@@ -1983,6 +2270,8 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
 def apply_low_level_stage(stage: str) -> None:
     global MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP
+    global MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS
+    global MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY
     global MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY
     global MISSING_BLOCK_DOUBLE_BEGIN_STEP
     global MISSING_BLOCK_TRIPLE_BEGIN_STEP
@@ -1991,57 +2280,75 @@ def apply_low_level_stage(stage: str) -> None:
     global RANDOM_TARGET_BLOCK_START_PROBABILITY
     global RANDOM_TARGET_BLOCK_END_PROBABILITY
     global RANDOM_TARGET_WITH_MISSING_BEGIN_STEP
+    global RANDOM_TARGET_WITH_MISSING_RAMP_STEPS
+    global RANDOM_TARGET_WITH_MISSING_START_PROBABILITY
+    global RANDOM_TARGET_WITH_MISSING_END_PROBABILITY
     global FORCED_MISSING_BLOCK_COUNT
 
-    MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 170_000
-    MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
-    MISSING_BLOCK_DOUBLE_BEGIN_STEP = 520_000
-    MISSING_BLOCK_TRIPLE_BEGIN_STEP = 760_000
-    RANDOM_TARGET_BLOCK_BEGIN_STEP = 350_000
-    RANDOM_TARGET_BLOCK_RAMP_STEPS = 240_000
-    RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.0
-    RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.15
-    RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 620_000
+    MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+    MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 600_000
+    MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.05
+    MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.35
+    MISSING_BLOCK_DOUBLE_BEGIN_STEP = 250_000
+    MISSING_BLOCK_TRIPLE_BEGIN_STEP = 500_000
+    RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
+    RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
+    RANDOM_TARGET_BLOCK_START_PROBABILITY = 1.0
+    RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
+    RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 0
+    RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 1
+    RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
+    RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
     FORCED_MISSING_BLOCK_COUNT = None
 
     if stage == "fixed":
+        MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+        RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.0
         RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.0
-        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+        RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 0.0
+        RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
     elif stage == "target":
+        MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
-        RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
-        RANDOM_TARGET_BLOCK_RAMP_STEPS = 450_000
-        RANDOM_TARGET_BLOCK_START_PROBABILITY = 0.10
-        RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.65
-        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+        RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 0.0
+        RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
     elif stage == "missing1":
         MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+        MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
+        MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.50
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
         MISSING_BLOCK_DOUBLE_BEGIN_STEP = 10**12
         MISSING_BLOCK_TRIPLE_BEGIN_STEP = 10**12
         RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
         RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
         RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
-        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+        RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
+        RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
     elif stage == "missing2":
         MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+        MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
+        MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.50
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
         MISSING_BLOCK_DOUBLE_BEGIN_STEP = 0
         MISSING_BLOCK_TRIPLE_BEGIN_STEP = 10**12
         RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
         RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
         RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
-        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 220_000
+        RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
+        RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
     elif stage == "missing3":
         MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
+        MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
+        MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.50
         MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.50
         MISSING_BLOCK_DOUBLE_BEGIN_STEP = 0
         MISSING_BLOCK_TRIPLE_BEGIN_STEP = 0
         RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
         RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
         RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
-        RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 220_000
+        RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
+        RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
     elif stage == "full":
         pass
     else:

@@ -22,10 +22,14 @@ def _set_eval_curriculum(missing_level: int) -> None:
     cfg.FORCED_MISSING_BLOCK_COUNT = missing_level
     cfg.MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = -1
     cfg.MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
+    cfg.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = (
+        1.0 if missing_level > 0 else 0.0
+    )
     cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 1.0 if missing_level > 0 else 0.0
     cfg.RANDOM_TARGET_BLOCK_BEGIN_STEP = 10**12
     cfg.RANDOM_TARGET_BLOCK_END_PROBABILITY = 0.0
-    cfg.RANDOM_TARGET_WITH_MISSING_BEGIN_STEP = 10**12
+    cfg.RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 0.0
+    cfg.RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
 
 
 def _evaluate_case(
@@ -39,9 +43,10 @@ def _evaluate_case(
 ) -> dict[str, float | int | str]:
     _set_eval_curriculum(missing_level)
 
-    env_cfg = cfg.jenga_env_cfg(play=True)
+    env_cfg = cfg.jenga_env_cfg()
     env_cfg.scene.num_envs = num_envs
     env_cfg.auto_reset = False
+    env_cfg.observations["actor"].enable_corruption = False
     env_cfg.commands["target_block"].force_target_name = target
 
     agent_cfg = cfg.jenga_ppo_runner_cfg()
@@ -58,10 +63,24 @@ def _evaluate_case(
 
     completed = 0
     success_count = 0
+    extraction_count = 0
     tower_large_count = 0
     progress_sum = 0.0
     progress_max = 0.0
     length_sum = 0.0
+    contact_rate_sum = 0.0
+    force_mean_sum = 0.0
+    stuck_rate_sum = 0.0
+    stop_rate_sum = 0.0
+    retreat_rate_sum = 0.0
+
+    episode_steps = torch.zeros(num_envs, device=device)
+    episode_contact_steps = torch.zeros(num_envs, device=device)
+    episode_force_sum = torch.zeros(num_envs, device=device)
+    episode_stuck_steps = torch.zeros(num_envs, device=device)
+    episode_stop_steps = torch.zeros(num_envs, device=device)
+    episode_retreat_steps = torch.zeros(num_envs, device=device)
+    episode_progress_max = torch.zeros(num_envs, device=device)
 
     obs = wrapped.get_observations()
     steps = 0
@@ -71,6 +90,15 @@ def _evaluate_case(
             obs, _, dones, _ = wrapped.step(action)
             steps += 1
 
+            current_progress = cfg.block_progress(env)
+            episode_steps += 1
+            episode_contact_steps += cfg.hook_contact_found(env)
+            episode_force_sum += cfg.hook_contact_force_norm(env)
+            episode_stuck_steps += cfg.stuck_contact_signal(env)
+            episode_stop_steps += cfg.stop_action_fraction(env)
+            episode_retreat_steps += cfg.retreat_action_fraction(env)
+            episode_progress_max = torch.maximum(episode_progress_max, current_progress)
+
             done_ids = torch.nonzero(dones, as_tuple=False).squeeze(-1)
             if done_ids.numel() == 0:
                 continue
@@ -78,18 +106,46 @@ def _evaluate_case(
             remaining = episodes - completed
             collect_ids = done_ids[:remaining]
             progress = cfg.block_progress(env)[collect_ids].detach()
+            extraction = cfg.target_extraction_reached(env)[collect_ids].detach()
             success = cfg.success_block_extract(env)[collect_ids].detach()
             tower_large = cfg.tower_large_perturbation(env)[collect_ids].detach()
             lengths = env.episode_length_buf[collect_ids].detach()
 
             completed += int(collect_ids.numel())
+            extraction_count += int(extraction.sum().item())
             success_count += int(success.sum().item())
             tower_large_count += int(tower_large.sum().item())
             progress_sum += float(progress.sum().item())
-            progress_max = max(progress_max, float(progress.max().item()))
+            progress_max = max(
+                progress_max,
+                float(episode_progress_max[collect_ids].max().item()),
+            )
             length_sum += float(lengths.float().sum().item())
+            denominators = episode_steps[collect_ids].clamp_min(1.0)
+            contact_rate_sum += float(
+                (episode_contact_steps[collect_ids] / denominators).sum().item()
+            )
+            force_mean_sum += float(
+                (episode_force_sum[collect_ids] / denominators).sum().item()
+            )
+            stuck_rate_sum += float(
+                (episode_stuck_steps[collect_ids] / denominators).sum().item()
+            )
+            stop_rate_sum += float(
+                (episode_stop_steps[collect_ids] / denominators).sum().item()
+            )
+            retreat_rate_sum += float(
+                (episode_retreat_steps[collect_ids] / denominators).sum().item()
+            )
 
             env.reset(env_ids=done_ids)
+            episode_steps[done_ids] = 0.0
+            episode_contact_steps[done_ids] = 0.0
+            episode_force_sum[done_ids] = 0.0
+            episode_stuck_steps[done_ids] = 0.0
+            episode_stop_steps[done_ids] = 0.0
+            episode_retreat_steps[done_ids] = 0.0
+            episode_progress_max[done_ids] = 0.0
             obs = wrapped.get_observations()
 
     env.close()
@@ -99,22 +155,34 @@ def _evaluate_case(
             "target": target,
             "missing_level": missing_level,
             "episodes": 0,
+            "extraction_rate": 0.0,
             "success_rate": 0.0,
             "tower_large_rate": 0.0,
             "progress_mean": 0.0,
             "progress_max": 0.0,
             "episode_length_mean": 0.0,
+            "contact_rate": 0.0,
+            "contact_force_mean": 0.0,
+            "stuck_rate": 0.0,
+            "stop_rate": 0.0,
+            "retreat_rate": 0.0,
         }
 
     return {
         "target": target,
         "missing_level": missing_level,
         "episodes": completed,
+        "extraction_rate": extraction_count / completed,
         "success_rate": success_count / completed,
         "tower_large_rate": tower_large_count / completed,
         "progress_mean": progress_sum / completed,
         "progress_max": progress_max,
         "episode_length_mean": length_sum / completed,
+        "contact_rate": contact_rate_sum / completed,
+        "contact_force_mean": force_mean_sum / completed,
+        "stuck_rate": stuck_rate_sum / completed,
+        "stop_rate": stop_rate_sum / completed,
+        "retreat_rate": retreat_rate_sum / completed,
     }
 
 
@@ -148,9 +216,13 @@ def main() -> None:
             rows.append(row)
             print(
                 f"{target:>5} missing={missing_level} "
+                f"extracted={row['extraction_rate']:.3f} "
                 f"success={row['success_rate']:.3f} "
                 f"progress={row['progress_mean']:.4f} "
                 f"tower_large={row['tower_large_rate']:.3f} "
+                f"contact={row['contact_rate']:.3f} "
+                f"stuck={row['stuck_rate']:.3f} "
+                f"retreat={row['retreat_rate']:.3f} "
                 f"len={row['episode_length_mean']:.1f}",
                 flush=True,
             )

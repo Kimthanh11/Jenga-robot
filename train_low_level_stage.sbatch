@@ -2,7 +2,7 @@
 # Train an explicit Jenga low-level stage.
 #
 # Usage:
-#   sbatch train_low_level_stage.sbatch target 10000 768
+#   sbatch train_low_level_stage.sbatch full 20000 768
 #   sbatch train_low_level_stage.sbatch missing1 10000 768 <target_run> model_9999.pt
 
 #SBATCH --job-name=jenga_low
@@ -17,8 +17,8 @@
 
 set -euo pipefail
 
-STAGE="${1:-fixed}"
-ITERS="${2:-10000}"
+STAGE="${1:-full}"
+ITERS="${2:-20000}"
 NUM_ENVS="${3:-768}"
 LOAD_RUN="${4:-}"
 CHECKPOINT="${5:-}"

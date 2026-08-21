@@ -13,7 +13,7 @@ def main() -> None:
         "stage",
         choices=("fixed", "target", "missing1", "missing2", "missing3", "full"),
     )
-    parser.add_argument("--iterations", type=int, default=10000)
+    parser.add_argument("--iterations", type=int, default=20000)
     parser.add_argument("--num-envs", type=int, default=768)
     parser.add_argument("--load-run", default=None)
     parser.add_argument("--load-checkpoint", default=None)
