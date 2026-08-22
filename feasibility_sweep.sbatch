@@ -40,12 +40,12 @@ export WANDB_MODE=disabled
 export MUJOCO_GL=egl
 
 PYTHONUNBUFFERED=1 ./.venv/bin/python feasibility_sweep.py \
-  --targets "${TARGETS}" \
-  --contact-z "${CONTACT_Z}" \
-  --seeds "${SEEDS}" \
-  ${FRICTIONS:+--frictions "${FRICTIONS}"} \
-  ${IMPRATIO:+--impratio "${IMPRATIO}"} \
-  ${CONE:+--cone "${CONE}"} \
+  --targets="${TARGETS}" \
+  --contact-z="${CONTACT_Z}" \
+  --seeds="${SEEDS}" \
+  ${FRICTIONS:+--frictions="${FRICTIONS}"} \
+  ${IMPRATIO:+--impratio="${IMPRATIO}"} \
+  ${CONE:+--cone="${CONE}"} \
   --max-steps 1400 \
   --device "cuda:0" \
   --csv "logs/feasibility/feas-${SLURM_JOB_ID:-local}.csv"
