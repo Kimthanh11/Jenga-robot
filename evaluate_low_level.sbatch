@@ -47,4 +47,7 @@ PYTHONUNBUFFERED=1 ./.venv/bin/python evaluate_low_level.py \
   --missing-levels "${LEVELS[@]}" \
   --episodes "${EPISODES}" \
   --num-envs "${NUM_ENVS}" \
-  --csv "${OUT}"   ${LEGACY:+--legacy-distribution} \n  ${IMPRATIO:+--impratio="${IMPRATIO}"} \n  ${CONE:+--cone="${CONE}"}
+  --csv "${OUT}" \
+  ${LEGACY:+--legacy-distribution} \
+  ${IMPRATIO:+--impratio="${IMPRATIO}"} \
+  ${CONE:+--cone="${CONE}"}
