@@ -208,6 +208,25 @@ def _evaluate_case(
     }
 
 
+def _append_row(csv_path, row) -> None:
+    """Write each case as soon as it is measured.
+
+    A full evaluation can outlive its Slurm time limit; writing only at the end meant a
+    two-hour job produced no file at all. Appending keeps every completed case.
+    """
+    if csv_path is None:
+        return
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
+    with path.open("a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=list(row.keys()), lineterminator="\n")
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a Jenga low-level policy.")
     parser.add_argument("--checkpoint", required=True)
@@ -246,6 +265,7 @@ def main() -> None:
                 cone=args.cone,
             )
             rows.append(row)
+            _append_row(args.csv, row)
             print(
                 f"{target:>5} missing={missing_level} "
                 f"extracted={row['extraction_rate']:.3f} "
@@ -260,13 +280,7 @@ def main() -> None:
             )
 
     if args.csv is not None:
-        csv_path = Path(args.csv)
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()), lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"Wrote {csv_path}")
+        print(f"Wrote {Path(args.csv)} ({len(rows)} rows)")
 
 
 if __name__ == "__main__":
