@@ -33,6 +33,13 @@ def main() -> None:
         default=None,
         help="Steps over which the success distance ramps from 2 cm to 11.25 cm.",
     )
+    parser.add_argument(
+        "--freeze-yaw",
+        action="store_true",
+        help="Zero the yaw curriculum so the yaw target stays at the per-env home. "
+        "The action dimension is kept, so the network shape stays comparable -- this "
+        "isolates whether yaw MOTION helps, not whether the input helps.",
+    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -42,6 +49,9 @@ def main() -> None:
     cfg.apply_low_level_stage(args.stage)
     if args.success_curriculum_steps is not None:
         cfg.SUCCESS_CURRICULUM_STEPS = args.success_curriculum_steps
+    if args.freeze_yaw:
+        cfg.YAW_CURRICULUM_START = 0.0
+        cfg.YAW_CURRICULUM_END = 0.0
     env_cfg = cfg.jenga_env_cfg()
     env_cfg.scene.num_envs = args.num_envs
 
@@ -55,6 +65,8 @@ def main() -> None:
         run_name += f"_ent{args.entropy_coef:g}"
     if args.success_curriculum_steps is not None:
         run_name += f"_cur{args.success_curriculum_steps}"
+    if args.freeze_yaw:
+        run_name += "_noyaw"
     if args.run_suffix:
         run_name += f"_{args.run_suffix}"
     agent_cfg.run_name = run_name
@@ -63,6 +75,7 @@ def main() -> None:
         f"stage={args.stage} run_name={run_name} "
         f"entropy_coef={agent_cfg.algorithm.entropy_coef} "
         f"success_curriculum_steps={cfg.SUCCESS_CURRICULUM_STEPS} "
+        f"yaw_curriculum=({cfg.YAW_CURRICULUM_START},{cfg.YAW_CURRICULUM_END}) "
         f"num_envs={args.num_envs} iterations={args.iterations}",
         flush=True,
     )
