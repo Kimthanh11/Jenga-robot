@@ -24,6 +24,7 @@ CHECKPOINT="${5:-}"
 ENTROPY="${6:-}"
 CURSTEPS="${7:-}"
 SUFFIX="${8:-}"
+FREEZEYAW="${9:-}"
 
 if { [ -n "${LOAD_RUN}" ] && [ -z "${CHECKPOINT}" ]; } || { [ -z "${LOAD_RUN}" ] && [ -n "${CHECKPOINT}" ]; }; then
   echo "LOAD_RUN and CHECKPOINT must be passed together" >&2
@@ -53,6 +54,7 @@ CMD=(./.venv/bin/python train_low_level_stage.py "${STAGE}" --iterations "${ITER
 if [ -n "${ENTROPY}" ]; then CMD+=(--entropy-coef "${ENTROPY}"); fi
 if [ -n "${CURSTEPS}" ]; then CMD+=(--success-curriculum-steps "${CURSTEPS}"); fi
 if [ -n "${SUFFIX}" ]; then CMD+=(--run-suffix "${SUFFIX}"); fi
+if [ -n "${FREEZEYAW}" ]; then CMD+=(--freeze-yaw); fi
 if [ -n "${LOAD_RUN}" ]; then
   CMD+=(--load-run "${LOAD_RUN}" --load-checkpoint "${CHECKPOINT}")
 fi
