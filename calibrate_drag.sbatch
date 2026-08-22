@@ -43,10 +43,10 @@ export WANDB_MODE=disabled
 export MUJOCO_GL=egl
 
 PYTHONUNBUFFERED=1 ./.venv/bin/python calibrate_drag.py \
-  --targets "${TARGETS}" \
-  --frictions "${FRICTIONS}" \
-  --impratio "${IMPRATIO}" \
-  --cone "${CONE}" \
+  --targets="${TARGETS}" \
+  --frictions="${FRICTIONS}" \
+  --impratio="${IMPRATIO}" \
+  --cone="${CONE}" \
   --max-steps 400 \
   --device "cuda:0" \
   --csv "logs/feasibility/calib_drag-${SLURM_JOB_ID:-local}.csv"
