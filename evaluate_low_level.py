@@ -32,6 +32,17 @@ def _set_eval_curriculum(missing_level: int) -> None:
     cfg.RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
 
 
+# Checkpoints trained before the distribution fix carry `std_param` (std_type
+# "scalar"); the fixed config uses `log_std_param` (std_type "log"), so they no longer
+# load with strict=True. Evaluation runs the deterministic policy, where std is
+# irrelevant -- this switch just restores the old parameter name for loading.
+LEGACY_DISTRIBUTION_CFG = {
+    "class_name": "GaussianDistribution",
+    "init_std": 0.8,
+    "std_type": "scalar",
+}
+
+
 def _evaluate_case(
     checkpoint: Path,
     target: str,
@@ -40,6 +51,7 @@ def _evaluate_case(
     num_envs: int,
     max_steps: int,
     device: str,
+    legacy_distribution: bool = False,
 ) -> dict[str, float | int | str]:
     _set_eval_curriculum(missing_level)
 
@@ -50,6 +62,8 @@ def _evaluate_case(
     env_cfg.commands["target_block"].force_target_name = target
 
     agent_cfg = cfg.jenga_ppo_runner_cfg()
+    if legacy_distribution:
+        agent_cfg.actor.distribution_cfg = dict(LEGACY_DISTRIBUTION_CFG)
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
     wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
     runner = MjlabOnPolicyRunner(wrapped, asdict(agent_cfg), device=device)
@@ -64,7 +78,7 @@ def _evaluate_case(
     completed = 0
     success_count = 0
     extraction_count = 0
-    tower_large_count = 0
+    tower_damage_count = 0
     progress_sum = 0.0
     progress_max = 0.0
     length_sum = 0.0
@@ -108,13 +122,13 @@ def _evaluate_case(
             progress = cfg.block_progress(env)[collect_ids].detach()
             extraction = cfg.target_extraction_reached(env)[collect_ids].detach()
             success = cfg.success_block_extract(env)[collect_ids].detach()
-            tower_large = cfg.tower_large_perturbation(env)[collect_ids].detach()
+            tower_damage = cfg.tower_damage_signal(env)[collect_ids].detach()
             lengths = env.episode_length_buf[collect_ids].detach()
 
             completed += int(collect_ids.numel())
             extraction_count += int(extraction.sum().item())
             success_count += int(success.sum().item())
-            tower_large_count += int(tower_large.sum().item())
+            tower_damage_count += int(tower_damage.sum().item())
             progress_sum += float(progress.sum().item())
             progress_max = max(
                 progress_max,
@@ -157,7 +171,7 @@ def _evaluate_case(
             "episodes": 0,
             "extraction_rate": 0.0,
             "success_rate": 0.0,
-            "tower_large_rate": 0.0,
+            "tower_damage_rate": 0.0,
             "progress_mean": 0.0,
             "progress_max": 0.0,
             "episode_length_mean": 0.0,
@@ -174,7 +188,7 @@ def _evaluate_case(
         "episodes": completed,
         "extraction_rate": extraction_count / completed,
         "success_rate": success_count / completed,
-        "tower_large_rate": tower_large_count / completed,
+        "tower_damage_rate": tower_damage_count / completed,
         "progress_mean": progress_sum / completed,
         "progress_max": progress_max,
         "episode_length_mean": length_sum / completed,
@@ -196,6 +210,11 @@ def main() -> None:
     parser.add_argument("--max-steps", type=int, default=5000)
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--csv", default=None)
+    parser.add_argument(
+        "--legacy-distribution",
+        action="store_true",
+        help="Load a checkpoint trained before the bounded-std fix.",
+    )
     args = parser.parse_args()
 
     checkpoint = Path(args.checkpoint)
@@ -212,6 +231,7 @@ def main() -> None:
                 num_envs=args.num_envs,
                 max_steps=args.max_steps,
                 device=args.device,
+                legacy_distribution=args.legacy_distribution,
             )
             rows.append(row)
             print(
@@ -219,7 +239,7 @@ def main() -> None:
                 f"extracted={row['extraction_rate']:.3f} "
                 f"success={row['success_rate']:.3f} "
                 f"progress={row['progress_mean']:.4f} "
-                f"tower_large={row['tower_large_rate']:.3f} "
+                f"tower_damage={row['tower_damage_rate']:.3f} "
                 f"contact={row['contact_rate']:.3f} "
                 f"stuck={row['stuck_rate']:.3f} "
                 f"retreat={row['retreat_rate']:.3f} "
