@@ -1,0 +1,197 @@
+from __future__ import annotations
+
+# =====================================================================================
+# Contact / friction calibration against a physical target: the DRAG RATIO.
+#
+#   drag ratio = (largest horizontal displacement of any NON-target block)
+#                / (horizontal displacement of the target block)
+#              , sampled when the target has moved a fixed reference distance.
+#
+# Why this metric: in real Jenga, pushing a block out barely moves the blocks above it.
+# The block resting on the layer above spans three stones; the friction from the target
+# acts on roughly a third of its underside while the other two thirds hold it under the
+# same load. So the drag ratio should be small -- a few percent. Measured here it is
+# 0.89 two layers above the target (b6_1 -> b8_1), i.e. the stack behaves more like a
+# glued solid than a pile of loose blocks. That is what makes tower_damage (25 mm for
+# ANY non-target block) fire at ~28 mm of target progress, which is why 12 of 14 targets
+# are unextractable.
+#
+# The point of this script is to find friction / contact settings that bring the drag
+# ratio into a physically sensible range, BEFORE deciding the RL target set.
+#
+# Note on impratio: raising it reduces numerical tangential slip, so it makes contacts
+# grip harder and pushes the drag ratio UP, not down.
+# =====================================================================================
+
+import argparse
+import csv
+from pathlib import Path
+
+
+def _parse_floats(value: str) -> list[float]:
+    return [float(item) for item in value.split(",") if item.strip()]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Calibrate contact physics via drag ratio.")
+    parser.add_argument(
+        "--targets",
+        default="b6_1,b6_3,b3_1,b7_1",
+        help="Targets to average over. Top-layer blocks have nothing above them and "
+        "therefore carry no information about drag.",
+    )
+    parser.add_argument(
+        "--frictions",
+        default="0.10,0.15,0.20,0.28,0.38,0.48",
+        help="Sliding friction values to sweep. Current config samples 0.28-0.48.",
+    )
+    parser.add_argument("--impratio", default="1.0", help="Comma-separated impratio values.")
+    parser.add_argument("--cone", default="pyramidal", help="pyramidal and/or elliptic.")
+    parser.add_argument(
+        "--reference-progress",
+        type=float,
+        default=0.020,
+        help="Target displacement (m) at which the drag ratio is sampled.",
+    )
+    parser.add_argument("--max-steps", type=int, default=900)
+    parser.add_argument("--seeds", default="42")
+    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--csv", default=None)
+    args = parser.parse_args()
+
+    import torch
+    from mjlab.envs import ManagerBasedRlEnv
+
+    import mjlab_jenga.jenga_mjenv_cfg as cfg
+
+    targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+    seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
+    rows: list[dict] = []
+
+    for cone in [c.strip() for c in args.cone.split(",") if c.strip()]:
+        for impratio in _parse_floats(args.impratio):
+            cfg.apply_low_level_stage("fixed")
+            cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END = 0.0
+            env_cfg = cfg.jenga_env_cfg(play=True)
+            env_cfg.scene.num_envs = len(targets)
+            env_cfg.auto_reset = False
+            env_cfg.commands["target_block"].force_target_names = tuple(targets)
+            env_cfg.sim.mujoco.cone = cone
+            env_cfg.sim.mujoco.impratio = impratio
+
+            env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device, render_mode=None)
+            try:
+                action = torch.zeros(
+                    (len(targets), env.action_manager.total_action_dim), device=env.device
+                )
+                action[:, 0] = -1.0
+                for friction in _parse_floats(args.frictions):
+                    cfg.RESET_FRICTION_SLIDING_RANGE = (friction, friction)
+                    for seed in seeds:
+                        rows.extend(
+                            _measure(env, cfg, torch, action, targets,
+                                     cone, impratio, friction, seed, args)
+                        )
+            finally:
+                env.close()
+
+    if args.csv is not None:
+        path = Path(args.csv)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"Wrote {path}", flush=True)
+
+
+def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, args):
+    num_envs = len(targets)
+    env.reset(seed=seed)
+    cmd = env.command_manager.get_term("target_block")
+    actual = [cmd._all_names[i] for i in cmd.selected_block_idx.tolist()]
+    if actual != targets:
+        raise RuntimeError(f"target assignment failed: {actual} != {targets}")
+
+    names = cmd._all_names
+    start = cmd._start_pos
+    env_arange = torch.arange(num_envs, device=env.device)
+    sel = cmd.selected_block_idx.clone()
+
+    sampled = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+    drag = torch.zeros(num_envs, device=env.device)
+    drag_block = [""] * num_envs
+    target_at_sample = torch.zeros(num_envs, device=env.device)
+    damaged_first = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
+    steps_taken = torch.zeros(num_envs, dtype=torch.long, device=env.device)
+
+    # Envs are frozen once sampled instead of being left to run and terminate again.
+    # Every reset fires randomize_block_physics (27x geom_friction + 27x pseudo_inertia
+    # with a full model-constant recompute), so letting sampled envs churn made this
+    # measurement cost hours instead of minutes.
+    live_action = action.clone()
+
+    for step in range(1, args.max_steps + 1):
+        env.step(live_action)
+        pos = torch.stack([b.data.body_link_pos_w[:, 0, :] for b in cmd._blocks], dim=0)
+        shift = torch.norm((pos - start.unsqueeze(1))[:, :, :2], dim=-1)     # [P, N]
+        target_shift = shift[sel, env_arange]                                # [N]
+
+        others = shift.clone()
+        others[sel, env_arange] = -1.0
+        other_max, other_idx = others.max(dim=0)
+
+        damaged = cfg.tower_damage(env)
+        reached = (target_shift >= args.reference_progress) & ~sampled
+        closing = (reached | (damaged & ~sampled))
+        if bool(closing.any().item()):
+            for i in closing.nonzero(as_tuple=False).squeeze(-1).tolist():
+                drag_block[i] = names[int(other_idx[i].item())]
+            ratio = other_max / target_shift.clamp_min(1e-9)
+            drag = torch.where(closing, ratio, drag)
+            target_at_sample = torch.where(closing, target_shift, target_at_sample)
+            damaged_first |= damaged & closing & ~reached
+            steps_taken = torch.where(closing, torch.full_like(steps_taken, step), steps_taken)
+            sampled |= closing
+            live_action[closing] = 0.0        # freeze: stop pushing, stop terminating
+
+        if bool(sampled.all().item()):
+            break
+
+        # auto_reset is off, so an env that terminated must be reset before the next
+        # step. Frozen envs no longer terminate, so this fires at most once per env.
+        done_ids = (cfg.tower_damage(env) | cfg.success_block_extract(env)) \
+            .nonzero(as_tuple=False).squeeze(-1)
+        if done_ids.numel() > 0:
+            env.reset(env_ids=done_ids)
+            sel = cmd.selected_block_idx.clone()
+
+    rows = []
+    for i, name in enumerate(targets):
+        rows.append({
+            "target": name,
+            "layer": int(name[1:].split("_")[0]),
+            "cone": cone,
+            "impratio": impratio,
+            "friction": friction,
+            "seed": seed,
+            "reached_reference": bool(sampled[i].item()) and not bool(damaged_first[i].item()),
+            "damaged_before_reference": bool(damaged_first[i].item()),
+            "target_shift_mm": round(float(target_at_sample[i].item()) * 1000, 3),
+            "drag_ratio": round(float(drag[i].item()), 4),
+            "drag_block": drag_block[i],
+            "steps": int(steps_taken[i].item()),
+        })
+        r = rows[-1]
+        print(
+            f"cone={cone:<9} impratio={impratio:<5} mu={friction:<5} {name:>5} "
+            f"drag={r['drag_ratio']:.3f} via {r['drag_block'] or '-':>5} "
+            f"at target={r['target_shift_mm']:.1f}mm "
+            f"{'(DAMAGE first)' if r['damaged_before_reference'] else ''}",
+            flush=True,
+        )
+    return rows
+
+
+if __name__ == "__main__":
+    main()

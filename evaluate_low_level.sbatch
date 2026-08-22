@@ -22,9 +22,15 @@ TARGETS="${2:-all}"
 LEVELS_CSV="${3:-0,1,2,3}"
 EPISODES="${4:-64}"
 NUM_ENVS="${5:-64}"
+LEGACY="${6:-}"   # pass "legacy" for checkpoints from before the std fix
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
+
+echo "commit:  $(git rev-parse HEAD)"
+echo "cwd:     $PWD"
+echo "python:  $(./.venv/bin/python -c 'import sys; print(sys.executable)')"
+echo "cfg:     $(./.venv/bin/python -c 'import mjlab_jenga.jenga_mjenv_cfg as c; print(c.__file__)')"
 
 IFS=',' read -r -a LEVELS <<< "${LEVELS_CSV}"
 OUT="logs/eval/eval-${SLURM_JOB_ID}.csv"
@@ -39,4 +45,4 @@ PYTHONUNBUFFERED=1 ./.venv/bin/python evaluate_low_level.py \
   --missing-levels "${LEVELS[@]}" \
   --episodes "${EPISODES}" \
   --num-envs "${NUM_ENVS}" \
-  --csv "${OUT}"
+  --csv "${OUT}"   ${LEGACY:+--legacy-distribution}
