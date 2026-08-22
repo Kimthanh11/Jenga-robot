@@ -100,9 +100,13 @@ RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 1
 RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
 RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
 FIXED_TARGET_BLOCK_NAME = "b6_1"
+# b1_1 and b1_3 are deliberately absent: the scripted full-push controller cannot
+# extract them. They end in step_cap rather than damage -- the tower holds, the block
+# simply stops after ~25 mm with the actuator at 5-6 N, at or above its stall force.
+# Layer 1 carries the whole tower, so this is a real force limit, not a policy failure,
+# and keeping them would hand PPO episodes it cannot win. Revisit if the push actuator
+# is ever given a larger force budget.
 RANDOM_TARGET_BLOCK_NAMES = (
-    "b1_1",
-    "b1_3",
     "b2_1",
     "b2_2",
     "b2_3",
@@ -1091,10 +1095,20 @@ def randomize_block_physics(
         )
 
 def all_block_pos(env):
+    """Critic observation: every block's world position, zeros for absent blocks.
+
+    Two defects this avoids. Routing through target_block_pos() returned the CURRENTLY
+    SELECTED block for the b6_1 slot, because that helper short-circuits on the target
+    asset name -- so one of the 27 slots did not mean what its position implied. And
+    blocks removed by the missing-block randomization are parked 1.5 m away rather than
+    deleted, which fed the critic a metre-scale jump in three of the 81 inputs.
+    """
     positions = []
     for block_cfg in _ALL_BLOCK_CFGS:
-        pos = target_block_pos(env, block_cfg)
-        positions.append(pos)
+        asset: Entity = env.scene[block_cfg.name]
+        pos = asset.data.body_link_pos_w[:, 0, :]
+        present = ~current_missing_block_mask(env, block_cfg.name)
+        positions.append(pos * present.unsqueeze(-1).to(pos.dtype))
     return torch.cat(positions, dim=-1)
 
 
@@ -1438,9 +1452,14 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
-SUCCESS_CURRICULUM_START = 0.75
-SUCCESS_CURRICULUM_END = 0.75
-SUCCESS_CURRICULUM_STEPS = 1
+# Fraction of the block length that counts as extracted. START == END made this a
+# no-op: 0.75 * 0.15 m = 112.5 mm was required from step 0, and the scripted controller
+# needs 400-900 contact steps to get there, so early policies never saw a success at
+# all. Ramping from 2 cm gives every target a reachable signal early -- even the ones
+# that only reach 79-106 mm before tripping tower_damage.
+SUCCESS_CURRICULUM_START = 0.1333   # 2.0 cm
+SUCCESS_CURRICULUM_END = 0.75       # 11.25 cm
+SUCCESS_CURRICULUM_STEPS = 200_000
 TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
 TOUCH_CURRICULUM_BEGIN_STEP = 0
@@ -2557,7 +2576,9 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     actor=RslRlModelCfg(
       hidden_dims=(64, 64),
       activation="elu",
-      obs_normalization=False,
+      # The critic reads 81 raw block coordinates alongside joint angles and contact
+      # forces, which span very different scales.
+      obs_normalization=True,
       # rsl_rl defaults std_range to (1e-6, 1e6) and learns std, while the entropy
       # bonus pushes it up and clip_actions clips only AFTER sampling -- so PPO keeps
       # scoring log-probs of samples that all execute as the same boundary action.
@@ -2575,7 +2596,7 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     critic=RslRlModelCfg(
       hidden_dims=(64, 64),
       activation="elu",
-      obs_normalization=False,
+      obs_normalization=True,
     ),
     algorithm=RslRlPpoAlgorithmCfg(
       value_loss_coef=1.0,
