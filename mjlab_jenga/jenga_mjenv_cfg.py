@@ -419,6 +419,18 @@ class TargetBlockCommand(CommandTerm):
             if cfg.force_target_name not in name_to_idx:
                 raise ValueError(f"Unknown forced target block: {cfg.force_target_name}")
             self._force_target_idx = name_to_idx[cfg.force_target_name]
+        self._force_target_per_env: torch.Tensor | None = None
+        if cfg.force_target_names:
+            unknown = [n for n in cfg.force_target_names if n not in name_to_idx]
+            if unknown:
+                raise ValueError(f"Unknown forced target blocks: {unknown}")
+            cycled = [
+                name_to_idx[cfg.force_target_names[i % len(cfg.force_target_names)]]
+                for i in range(self.num_envs)
+            ]
+            self._force_target_per_env = torch.tensor(
+                cycled, dtype=torch.long, device=self.device
+            )
         selectable = [
             name_to_idx[name]
             for name in cfg.selectable_target_names
@@ -636,7 +648,10 @@ class TargetBlockCommand(CommandTerm):
         if num_resets == 0:
             return
 
-        if self._force_target_idx is None:
+        if self._force_target_per_env is not None:
+            selected = self._force_target_per_env[env_ids]
+            use_random = torch.ones(num_resets, dtype=torch.bool, device=self.device)
+        elif self._force_target_idx is None:
             random_probability = random_target_block_scale(self._env)
             use_random = torch.rand(num_resets, device=self.device) < random_probability
             present_by_block = self._present_by_block()
@@ -729,6 +744,10 @@ class TargetBlockCommandCfg(CommandTermCfg):
     fixed_target_name: str = FIXED_TARGET_BLOCK_NAME
     selectable_target_names: tuple[str, ...] = RANDOM_TARGET_BLOCK_NAMES
     force_target_name: str | None = None
+    force_target_names: tuple[str, ...] = ()
+    """Per-env forced targets, cycled over the envs. Lets one vectorized rollout cover
+    several target blocks at once (feasibility sweeps). Takes precedence over
+    ``force_target_name``; empty means "not used"."""
     debug_target_reset: bool = False
 
     def build(self, env: ManagerBasedRlEnv) -> TargetBlockCommand:
@@ -2087,6 +2106,15 @@ class CurriculumYawActionCfg(ActionTermCfg):
 
 
 class CurriculumYawAction(ActionTerm):
+    """Relative yaw target, integrated on the COMMANDED target.
+
+    Integrating on the measured joint position instead makes the servo error identically
+    zero whenever the action is small, so the joint free-wheels under contact load and
+    the target ratchets along with it. Measured on b1_1: yaw drifted 90.1deg -> 85.7deg
+    while the target tracked it to within 0.06deg. At the ~0.2 m lever arm that is ~15 mm
+    of tip travel lost, and it cost ~25% of the delivered push force across all targets.
+    """
+
     cfg: CurriculumYawActionCfg
 
     def __init__(self, cfg: CurriculumYawActionCfg, env: ManagerBasedRlEnv):
@@ -2099,6 +2127,11 @@ class CurriculumYawAction(ActionTerm):
         self._target_names = joint_names
         self._raw_actions = torch.zeros(self.num_envs, self.action_dim, device=self.device)
         self._processed_targets = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        # The action manager resets before the command manager resamples, so the new
+        # home yaw is not known yet at reset time. Seed the target lazily instead.
+        self._needs_home_init = torch.ones(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
 
     @property
     def action_dim(self) -> int:
@@ -2111,20 +2144,23 @@ class CurriculumYawAction(ActionTerm):
     def process_actions(self, actions: torch.Tensor) -> None:
         self._raw_actions[:] = torch.clamp(actions, -ACTION_CLIP, ACTION_CLIP)
 
-        joint_pos = self._entity.data.joint_pos[:, self._target_ids]
         delta_yaw = self._raw_actions * self.cfg.scale * yaw_curriculum_scale(self._env)
         cmd = _target_command_or_none(self._env)
         if cmd is not None:
             home_yaw = cmd.selected_hook_home()[:, 3:4]
+            self._processed_targets = torch.where(
+                self._needs_home_init.unsqueeze(-1), home_yaw, self._processed_targets
+            )
+            self._needs_home_init[:] = False
             self._processed_targets = torch.clamp(
-                joint_pos + delta_yaw,
+                self._processed_targets + delta_yaw,
                 home_yaw - YAW_TARGET_LIMIT,
                 home_yaw + YAW_TARGET_LIMIT,
             )
             return
 
         self._processed_targets = torch.clamp(
-            joint_pos + delta_yaw,
+            self._processed_targets + delta_yaw,
             -YAW_TARGET_LIMIT,
             YAW_TARGET_LIMIT,
         )
@@ -2140,6 +2176,7 @@ class CurriculumYawAction(ActionTerm):
             env_ids = slice(None)
         self._raw_actions[env_ids] = 0.0
         self._processed_targets[env_ids] = 0.0
+        self._needs_home_init[env_ids] = True
 
 
 # Environment configuration
@@ -2496,10 +2533,18 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       hidden_dims=(64, 64),
       activation="elu",
       obs_normalization=False,
+      # rsl_rl defaults std_range to (1e-6, 1e6) and learns std, while the entropy
+      # bonus pushes it up and clip_actions clips only AFTER sampling -- so PPO keeps
+      # scoring log-probs of samples that all execute as the same boundary action.
+      # Observed std of 117 and 743, with mean action norm exactly 2.0 (the maximum for
+      # four actions in [-1,1]) and an episode return of exactly
+      # -0.00005 * 4 * 2000 = -0.40, i.e. pure action-magnitude penalty and nothing else.
+      # Bounding std_range is the fix; "log" is better conditioned than "scalar".
       distribution_cfg={
         "class_name": "GaussianDistribution",
-        "init_std": 0.8,
-        "std_type": "scalar",
+        "init_std": 0.25,
+        "std_type": "log",
+        "std_range": (0.05, 1.0),
       },
     ),
     critic=RslRlModelCfg(
