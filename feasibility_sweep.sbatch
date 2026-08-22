@@ -23,6 +23,8 @@ TARGETS="${1:-all}"
 CONTACT_Z="${2:-0.0}"
 FRICTIONS="${3:-}"
 SEEDS="${4:-42}"
+IMPRATIO="${5:-}"
+CONE="${6:-}"
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/feasibility
@@ -32,6 +34,7 @@ echo "cwd:     $PWD"
 echo "python:  $(./.venv/bin/python -c 'import sys; print(sys.executable)')"
 echo "mujoco:  $(./.venv/bin/python -c 'import mujoco; print(mujoco.__version__)')"
 echo "targets: ${TARGETS} | contact_z: ${CONTACT_Z} | frictions: ${FRICTIONS:-sampled} | seeds: ${SEEDS}"
+echo "impratio: ${IMPRATIO:-default} | cone: ${CONE:-default}"
 
 export WANDB_MODE=disabled
 export MUJOCO_GL=egl
@@ -41,6 +44,8 @@ PYTHONUNBUFFERED=1 ./.venv/bin/python feasibility_sweep.py \
   --contact-z "${CONTACT_Z}" \
   --seeds "${SEEDS}" \
   ${FRICTIONS:+--frictions "${FRICTIONS}"} \
+  ${IMPRATIO:+--impratio "${IMPRATIO}"} \
+  ${CONE:+--cone "${CONE}"} \
   --max-steps 1400 \
   --device "cuda:0" \
   --csv "logs/feasibility/feas-${SLURM_JOB_ID:-local}.csv"
