@@ -21,6 +21,9 @@ ITERS="${2:-20000}"
 NUM_ENVS="${3:-768}"
 LOAD_RUN="${4:-}"
 CHECKPOINT="${5:-}"
+ENTROPY="${6:-}"
+CURSTEPS="${7:-}"
+SUFFIX="${8:-}"
 
 if { [ -n "${LOAD_RUN}" ] && [ -z "${CHECKPOINT}" ]; } || { [ -z "${LOAD_RUN}" ] && [ -n "${CHECKPOINT}" ]; }; then
   echo "LOAD_RUN and CHECKPOINT must be passed together" >&2
@@ -34,6 +37,9 @@ echo "Training Jenga low-level stage"
 echo "  stage:      ${STAGE}"
 echo "  iterations: ${ITERS}"
 echo "  num_envs:   ${NUM_ENVS}"
+echo "  entropy:    ${ENTROPY:-default}"
+echo "  cur_steps:  ${CURSTEPS:-default}"
+echo "  commit:     $(git rev-parse HEAD)"
 if [ -n "${LOAD_RUN}" ]; then
   echo "  load_run:   ${LOAD_RUN}"
   echo "  checkpoint: ${CHECKPOINT}"
@@ -44,6 +50,9 @@ export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
 CMD=(./.venv/bin/python train_low_level_stage.py "${STAGE}" --iterations "${ITERS}" --num-envs "${NUM_ENVS}")
+if [ -n "${ENTROPY}" ]; then CMD+=(--entropy-coef "${ENTROPY}"); fi
+if [ -n "${CURSTEPS}" ]; then CMD+=(--success-curriculum-steps "${CURSTEPS}"); fi
+if [ -n "${SUFFIX}" ]; then CMD+=(--run-suffix "${SUFFIX}"); fi
 if [ -n "${LOAD_RUN}" ]; then
   CMD+=(--load-run "${LOAD_RUN}" --load-checkpoint "${CHECKPOINT}")
 fi

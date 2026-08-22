@@ -17,18 +17,55 @@ def main() -> None:
     parser.add_argument("--num-envs", type=int, default=768)
     parser.add_argument("--load-run", default=None)
     parser.add_argument("--load-checkpoint", default=None)
+    # Overrides for A/B runs. Defaults stay in the config so a plain invocation is
+    # always the committed setting; anything set here is echoed into the run name so
+    # two concurrent runs stay distinguishable in the log directory.
+    parser.add_argument(
+        "--entropy-coef",
+        type=float,
+        default=None,
+        help="Once the task is saturated the entropy bonus is the only gradient left, "
+        "so std drifts up to its cap. Lower this to test whether that hurts.",
+    )
+    parser.add_argument(
+        "--success-curriculum-steps",
+        type=int,
+        default=None,
+        help="Steps over which the success distance ramps from 2 cm to 11.25 cm.",
+    )
+    parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
     if (args.load_run is None) != (args.load_checkpoint is None):
         parser.error("--load-run and --load-checkpoint must be given together")
 
     cfg.apply_low_level_stage(args.stage)
+    if args.success_curriculum_steps is not None:
+        cfg.SUCCESS_CURRICULUM_STEPS = args.success_curriculum_steps
     env_cfg = cfg.jenga_env_cfg()
     env_cfg.scene.num_envs = args.num_envs
 
     agent_cfg = cfg.jenga_ppo_runner_cfg()
     agent_cfg.max_iterations = args.iterations
-    agent_cfg.run_name = f"low_level_{args.stage}"
+    if args.entropy_coef is not None:
+        agent_cfg.algorithm.entropy_coef = args.entropy_coef
+
+    run_name = f"low_level_{args.stage}"
+    if args.entropy_coef is not None:
+        run_name += f"_ent{args.entropy_coef:g}"
+    if args.success_curriculum_steps is not None:
+        run_name += f"_cur{args.success_curriculum_steps}"
+    if args.run_suffix:
+        run_name += f"_{args.run_suffix}"
+    agent_cfg.run_name = run_name
+
+    print(
+        f"stage={args.stage} run_name={run_name} "
+        f"entropy_coef={agent_cfg.algorithm.entropy_coef} "
+        f"success_curriculum_steps={cfg.SUCCESS_CURRICULUM_STEPS} "
+        f"num_envs={args.num_envs} iterations={args.iterations}",
+        flush=True,
+    )
     if args.load_run is not None:
         agent_cfg.resume = True
         agent_cfg.load_run = args.load_run
