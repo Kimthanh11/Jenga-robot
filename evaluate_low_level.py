@@ -52,6 +52,8 @@ def _evaluate_case(
     max_steps: int,
     device: str,
     legacy_distribution: bool = False,
+    impratio: float | None = None,
+    cone: str | None = None,
 ) -> dict[str, float | int | str]:
     _set_eval_curriculum(missing_level)
 
@@ -60,6 +62,12 @@ def _evaluate_case(
     env_cfg.auto_reset = False
     env_cfg.observations["actor"].enable_corruption = False
     env_cfg.commands["target_block"].force_target_name = target
+    # Changing contact physics invalidates comparisons against runs made under the old
+    # settings, so a checkpoint has to be re-evaluated under the new ones to compare.
+    if impratio is not None:
+        env_cfg.sim.mujoco.impratio = impratio
+    if cone is not None:
+        env_cfg.sim.mujoco.cone = cone
 
     agent_cfg = cfg.jenga_ppo_runner_cfg()
     if legacy_distribution:
@@ -215,6 +223,8 @@ def main() -> None:
         action="store_true",
         help="Load a checkpoint trained before the bounded-std fix.",
     )
+    parser.add_argument("--impratio", type=float, default=None)
+    parser.add_argument("--cone", default=None)
     args = parser.parse_args()
 
     checkpoint = Path(args.checkpoint)
@@ -232,6 +242,8 @@ def main() -> None:
                 max_steps=args.max_steps,
                 device=args.device,
                 legacy_distribution=args.legacy_distribution,
+                impratio=args.impratio,
+                cone=args.cone,
             )
             rows.append(row)
             print(

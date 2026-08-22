@@ -22,7 +22,9 @@ TARGETS="${2:-all}"
 LEVELS_CSV="${3:-0,1,2,3}"
 EPISODES="${4:-64}"
 NUM_ENVS="${5:-64}"
-LEGACY="${6:-}"   # pass "legacy" for checkpoints from before the std fix
+LEGACY="${6:-}"
+IMPRATIO="${7:-}"
+CONE="${8:-}"   # pass "legacy" for checkpoints from before the std fix
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
@@ -45,4 +47,4 @@ PYTHONUNBUFFERED=1 ./.venv/bin/python evaluate_low_level.py \
   --missing-levels "${LEVELS[@]}" \
   --episodes "${EPISODES}" \
   --num-envs "${NUM_ENVS}" \
-  --csv "${OUT}"   ${LEGACY:+--legacy-distribution}
+  --csv "${OUT}"   ${LEGACY:+--legacy-distribution} \n  ${IMPRATIO:+--impratio="${IMPRATIO}"} \n  ${CONE:+--cone="${CONE}"}
