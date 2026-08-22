@@ -55,6 +55,15 @@ def main() -> None:
         "tower: the stability baseline is the nominal spawn pose, but the tower drops "
         "~5.4 mm below it immediately, so the budget is spent before the policy acts.",
     )
+    parser.add_argument(
+        "--impratio",
+        type=float,
+        default=None,
+        help="Override MuJoCo impratio. Measured drag ratio on b6_1: 0.81 at 1.0 "
+        "(the default), 0.32 at 10, 0.23 at 30. MuJoCo recommends 10-100 for "
+        "friction-critical contact.",
+    )
+    parser.add_argument("--cone", default=None, help="pyramidal or elliptic.")
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--csv", default=None)
     args = parser.parse_args()
@@ -91,6 +100,10 @@ def main() -> None:
     env_cfg.scene.num_envs = num_envs
     env_cfg.auto_reset = False
     env_cfg.commands["target_block"].force_target_names = tuple(targets)
+    if args.impratio is not None:
+        env_cfg.sim.mujoco.impratio = args.impratio
+    if args.cone is not None:
+        env_cfg.sim.mujoco.cone = args.cone
 
     env = ManagerBasedRlEnv(cfg=env_cfg, device=args.device, render_mode=None)
     rows: list[dict] = []
