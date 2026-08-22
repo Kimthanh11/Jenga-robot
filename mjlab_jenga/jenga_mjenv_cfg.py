@@ -2420,7 +2420,32 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         sim=SimulationCfg(
             nconmax=4096,
             njmax=4096,
-            mujoco=MujocoCfg(timestep=0.002),
+            # impratio is the stiffness of friction constraints relative to normal
+            # ones. At MuJoCo's default of 1.0 they are equally soft, so contacts creep
+            # tangentially well below the friction limit and the whole tower shears:
+            # pushing b6_1 moved b8_1 -- two layers up -- by 89% as far, and twisted the
+            # top of the tower by 8.45 deg. tower_damage (25 mm for any non-target block)
+            # then fired at ~28 mm of target progress against a 112.5 mm success
+            # distance, leaving 12 of 14 targets unextractable.
+            #
+            # Measured mean drag ratio over b6_1/b6_3/b3_1/b7_1 (pyramidal cone):
+            #
+            #        mu     impratio=1   impratio=10   impratio=30
+            #      0.20          0.566         0.323         0.270
+            #      0.28          0.615         0.272         0.196
+            #      0.48          0.896         0.285         0.194
+            #
+            # Note the sign flip: at impratio=1 more friction means more drag, because
+            # what is being measured is compliance scaling with contact load. Once the
+            # compliance is gone, more friction means less drag -- the neighbours hold
+            # each other. So the existing friction range is already right; impratio was
+            # the wrong parameter. 30 sits inside MuJoCo's recommended 10-100 band for
+            # friction-critical contact. Extractable targets went from 2/14 to 7/14.
+            #
+            # elliptic cone was measured too and is unusable here: it pushes the reset
+            # settling transient past the damage limit (tower_damage fires at step 6
+            # with the target unmoved) and locks other targets solid.
+            mujoco=MujocoCfg(timestep=0.002, impratio=30.0),
         ),
         decimation=5,
         episode_length_s=20.0,
