@@ -19,8 +19,10 @@ from __future__ import annotations
 # The point of this script is to find friction / contact settings that bring the drag
 # ratio into a physically sensible range, BEFORE deciding the RL target set.
 #
-# Note on impratio: raising it reduces numerical tangential slip, so it makes contacts
-# grip harder and pushes the drag ratio UP, not down.
+# Note on impratio: it turned out to be the dominant knob, and in the opposite direction
+# to the guess above it. At impratio=1 friction constraints are as soft as normal ones,
+# so the stack shears elastically; stiffening them (10-30) cut the drag ratio from 0.81
+# to 0.19. Friction itself barely matters once the compliance is gone.
 # =====================================================================================
 
 import argparse
@@ -99,7 +101,7 @@ def main() -> None:
         path = Path(args.csv)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
         print(f"Wrote {path}", flush=True)

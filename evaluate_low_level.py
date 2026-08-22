@@ -263,7 +263,7 @@ def main() -> None:
         csv_path = Path(args.csv)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         with csv_path.open("w", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))
+            writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()), lineterminator="\n")
             writer.writeheader()
             writer.writerows(rows)
         print(f"Wrote {csv_path}")
