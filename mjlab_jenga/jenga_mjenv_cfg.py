@@ -82,6 +82,18 @@ SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
 LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 
+# Every curriculum is a function of env.common_step_counter, which restarts at 0 on a
+# resumed run -- so continuing a training would silently rewind the difficulty to its
+# starting value. Setting this offset makes a resumed run pick the curriculum up where
+# the previous one stopped.
+CURRICULUM_STEP_OFFSET = 0
+
+
+def curriculum_step(env) -> int:
+    """Curriculum clock: wall step count plus the resume offset."""
+    return env.common_step_counter + CURRICULUM_STEP_OFFSET
+
+
 MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
 MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 600_000
 MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.05
@@ -254,7 +266,7 @@ def random_target_block_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Probability that a reset uses a random target block instead of b6_1."""
     progress = (
         max(
-            env.common_step_counter - RANDOM_TARGET_BLOCK_BEGIN_STEP,
+            curriculum_step(env) - RANDOM_TARGET_BLOCK_BEGIN_STEP,
             0,
         )
         / RANDOM_TARGET_BLOCK_RAMP_STEPS
@@ -272,7 +284,7 @@ def random_target_with_missing_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Probability that random targets are allowed in already incomplete towers."""
     progress = (
         max(
-            env.common_step_counter - RANDOM_TARGET_WITH_MISSING_BEGIN_STEP,
+            curriculum_step(env) - RANDOM_TARGET_WITH_MISSING_BEGIN_STEP,
             0,
         )
         / RANDOM_TARGET_WITH_MISSING_RAMP_STEPS
@@ -772,7 +784,7 @@ def missing_block_randomization_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
     """Probability that a reset uses a non-empty missing-block pattern."""
     progress = min(
         max(
-            env.common_step_counter - MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP,
+            curriculum_step(env) - MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP,
             0,
         )
         / MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS,
@@ -789,11 +801,11 @@ def missing_block_max_count(env: ManagerBasedRlEnv) -> int:
     """Maximum number of missing blocks allowed at the current curriculum step."""
     if FORCED_MISSING_BLOCK_COUNT is not None:
         return FORCED_MISSING_BLOCK_COUNT
-    if env.common_step_counter >= MISSING_BLOCK_TRIPLE_BEGIN_STEP:
+    if curriculum_step(env) >= MISSING_BLOCK_TRIPLE_BEGIN_STEP:
         return 3
-    if env.common_step_counter >= MISSING_BLOCK_DOUBLE_BEGIN_STEP:
+    if curriculum_step(env) >= MISSING_BLOCK_DOUBLE_BEGIN_STEP:
         return 2
-    if env.common_step_counter >= MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP:
+    if curriculum_step(env) >= MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP:
         return 1
     return 0
 
@@ -1550,7 +1562,7 @@ def tower_instability_fraction(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def success_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
-    progress = min(env.common_step_counter / SUCCESS_CURRICULUM_STEPS, 1.0)
+    progress = min(curriculum_step(env) / SUCCESS_CURRICULUM_STEPS, 1.0)
     scale = SUCCESS_CURRICULUM_START + (
         SUCCESS_CURRICULUM_END - SUCCESS_CURRICULUM_START
     ) * progress
@@ -1564,7 +1576,7 @@ def _linear_curriculum_scale(
     begin_step: int,
     steps: int,
 ) -> torch.Tensor:
-    progress = min(max(env.common_step_counter - begin_step, 0) / steps, 1.0)
+    progress = min(max(curriculum_step(env) - begin_step, 0) / steps, 1.0)
     scale = start + (end - start) * progress
     return torch.tensor(scale, device=env.device)
 
@@ -2602,7 +2614,11 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       value_loss_coef=1.0,
       use_clipped_value_loss=True,
       clip_param=0.2,
-      entropy_coef=0.01,
+      # A/B at equal iteration (800): entropy 0.01 -> reward 17.76 with std pinned
+      # at the 1.0 cap since iteration ~400; entropy 0.002 -> reward 17.49 with std
+      # falling to 0.16. Same return, but the weaker bonus lets the policy gradient
+      # pull std down instead of the entropy term pushing it into the clip region.
+      entropy_coef=0.002,
       num_learning_epochs=5,
       num_mini_batches=4,
       learning_rate=1.0e-3,
