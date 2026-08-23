@@ -90,6 +90,15 @@ LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 # the previous one stopped.
 CURRICULUM_STEP_OFFSET = 0
 
+# Horizontal block displacement is measured against the nominal spawn pose, so a tower
+# that slides across the floor as one rigid piece counts as damaged even though nothing
+# about it came apart. With this enabled the bottom layer's drift is subtracted first,
+# making the measure "how far has this block moved relative to the tower's base" --
+# shear and blocks sliding out of their layer still count, rigid translation does not.
+# Off by default until the A/B says it helps. Layer 1 is never a target and never a
+# missing-block candidate, so the base reference is always intact.
+TOWER_SHIFT_RELATIVE_TO_BASE = False
+
 
 def curriculum_step(env) -> int:
     """Curriculum clock: wall step count plus the resume offset."""
@@ -453,6 +462,11 @@ class TargetBlockCommand(CommandTerm):
             dtype=torch.long,
             device=self.device,
         )
+        self._base_idx = torch.tensor(
+            [idx for idx, entry in enumerate(entries) if entry["layer"] == 1],
+            dtype=torch.long,
+            device=self.device,
+        )
         self._support_idx = torch.tensor(
             [entry["support_idx"] for entry in entries],
             dtype=torch.long,
@@ -683,6 +697,12 @@ class TargetBlockCommand(CommandTerm):
 
         stability_mask = present_for_com.transpose(0, 1)
         position_delta = all_pos - self._start_pos.unsqueeze(1)
+        if TOWER_SHIFT_RELATIVE_TO_BASE:
+            base_drift = (
+                all_pos[self._base_idx].mean(dim=0)
+                - self._start_pos[self._base_idx].mean(dim=0).unsqueeze(0)
+            )
+            position_delta = position_delta - base_drift.unsqueeze(0)
         horizontal_shift = torch.norm(position_delta[:, :, :2], dim=-1)
         vertical_shift = torch.abs(position_delta[:, :, 2])
         # Tilt, not total rotation. The previous form took the full quaternion angle
