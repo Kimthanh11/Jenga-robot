@@ -62,6 +62,8 @@ RESET_FRICTION_TORSIONAL_RANGE = (0.012, 0.055)
 RESET_FRICTION_ROLLING_RANGE = (0.001, 0.001)
 TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT = 0.012
 TOWER_SUCCESS_MAX_BLOCK_VERTICAL_SHIFT = 0.008
+# Out-of-plane tilt of any non-target block. These limits always described tipping;
+# the measurement, not the numbers, was wrong.
 TOWER_SUCCESS_MAX_BLOCK_ROTATION = math.radians(8.0)
 TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT = 0.025
 TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT = 0.015
@@ -683,11 +685,23 @@ class TargetBlockCommand(CommandTerm):
         position_delta = all_pos - self._start_pos.unsqueeze(1)
         horizontal_shift = torch.norm(position_delta[:, :, :2], dim=-1)
         vertical_shift = torch.abs(position_delta[:, :, 2])
+        # Tilt, not total rotation. The previous form took the full quaternion angle
+        # against the spawn pose, which is dominated by rotation about the vertical
+        # axis: measured 77-96% yaw (b6_1 3.62 deg total of which 0.15 deg tilt, b7_1
+        # 2.80/0.12). A Jenga block that turns in its own plane still lies flat and
+        # still carries the layer above it -- that is not instability. Tipping is.
+        # Conflating them made the stability gate fire on a harmless quantity: training
+        # stalled at max_block_rot_deg_mean 6.7 against an 8 deg limit while actual tilt
+        # was around 0.2 deg.
+        #
+        # Blocks spawn flat, so measuring against world +Z rather than the spawn
+        # quaternion is equivalent and cheaper: for q = (w, x, y, z) the z-component of
+        # R*[0,0,1] is 1 - 2*(x^2 + y^2).
         current_quat = all_pose[:, :, 3:7]
-        quat_dot = torch.abs(
-            torch.sum(current_quat * self._start_quat.unsqueeze(1), dim=-1)
-        ).clamp(max=1.0)
-        rotation = 2.0 * torch.acos(quat_dot)
+        up_z = 1.0 - 2.0 * (
+            current_quat[:, :, 1] ** 2 + current_quat[:, :, 2] ** 2
+        )
+        rotation = torch.acos(up_z.clamp(-1.0, 1.0))
         zeros = torch.zeros_like(horizontal_shift)
         self._cur_max_block_horizontal_shift = torch.where(
             stability_mask,
