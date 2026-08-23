@@ -359,6 +359,30 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
     for idx, entry in enumerate(entries):
         entry["neighbors"] = [other for other in by_layer[entry["layer"]] if other != idx]
 
+    # Fixed 8 slots describing the target's structural surroundings:
+    #   [same-layer x2, layer above x3, layer below x3]
+    # Slot meaning is identical for every target, so the policy can read them the same
+    # way regardless of which block it was assigned. Slots that cannot exist (no layer
+    # above for layer 9, none below for layer 1) are marked invalid rather than absent.
+    for idx, entry in enumerate(entries):
+        layer = entry["layer"]
+        groups = (
+            ([other for other in by_layer[layer] if other != idx], 2),
+            (by_layer.get(layer + 1, []), 3),
+            (by_layer.get(layer - 1, []), 3),
+        )
+        support_idx, support_valid = [], []
+        for members, width in groups:
+            for slot in range(width):
+                if slot < len(members):
+                    support_idx.append(members[slot])
+                    support_valid.append(1.0)
+                else:
+                    support_idx.append(0)
+                    support_valid.append(0.0)
+        entry["support_idx"] = support_idx
+        entry["support_valid"] = support_valid
+
     return names, entries
 
 
@@ -426,6 +450,19 @@ class TargetBlockCommand(CommandTerm):
             [entry["neighbors"] for entry in entries],
             dtype=torch.long,
             device=self.device,
+        )
+        self._support_idx = torch.tensor(
+            [entry["support_idx"] for entry in entries],
+            dtype=torch.long,
+            device=self.device,
+        )
+        self._support_valid = torch.tensor(
+            [entry["support_valid"] for entry in entries],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        self._cur_present = torch.ones(
+            self.num_envs, len(names), dtype=torch.bool, device=self.device
         )
 
         name_to_idx = {name: idx for idx, name in enumerate(names)}
@@ -555,6 +592,18 @@ class TargetBlockCommand(CommandTerm):
     def selected_max_block_rotation(self) -> torch.Tensor:
         return self._cur_max_block_rotation
 
+    def selected_support_presence(self) -> torch.Tensor:
+        """Presence of the blocks structurally around the target, per fixed slot.
+
+        1 = present, 0 = removed, -1 = the slot cannot exist for this target. The three
+        values are distinct on purpose: "there is no layer below me" is a different
+        situation from "the block below me was taken away".
+        """
+        idx = self._support_idx[self.selected_block_idx]
+        valid = self._support_valid[self.selected_block_idx]
+        present = torch.gather(self._cur_present.float(), 1, idx)
+        return present * valid + (valid - 1.0)
+
     def selected_extraction_w(self) -> torch.Tensor:
         return self._extraction[self.selected_block_idx]
 
@@ -605,6 +654,7 @@ class TargetBlockCommand(CommandTerm):
 
         neighbor_idx = self._neighbor_idx[selected]
         present_by_block = self._present_by_block()
+        self._cur_present = present_by_block
         neighbor_present = present_by_block[env_ids.unsqueeze(1), neighbor_idx]
         neighbor_pos = all_pos[neighbor_idx, env_ids.unsqueeze(1)]
         neighbor_start = self._start_pos[neighbor_idx]
@@ -1448,6 +1498,45 @@ def target_selection_features(env: ManagerBasedRlEnv) -> torch.Tensor:
     return cmd.selected_target_features()
 
 
+def target_support_presence(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Which blocks around the target are still there (8 fixed slots).
+
+    Without this the actor cannot tell an intact tower from one missing a supporting
+    block, while being penalized for instability and terminated on damage. Only the
+    critic saw the tower, so it could recognise danger during training that the actor
+    could not react to at execution time.
+    """
+    cmd = _target_command_or_none(env)
+    if cmd is None:
+        return torch.zeros(env.num_envs, 8, device=env.device)
+    return cmd.selected_support_presence()
+
+
+def tower_state_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """How close the tower is to the damage limits, as fractions of those limits.
+
+    The actor is penalized for new instability and the episode terminates on damage,
+    but neither quantity was observable. A value of 1.0 means the limit is reached.
+    """
+    return torch.stack(
+        (
+            tower_max_block_horizontal_shift(env)
+            / TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT,
+            tower_max_block_vertical_shift(env)
+            / TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT,
+            tower_max_block_rotation(env) / TOWER_DAMAGE_MAX_BLOCK_ROTATION,
+            tower_instability_fraction(env),
+        ),
+        dim=-1,
+    )
+
+
+def last_action(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """Previous action. There is an action-rate penalty the actor could not account
+    for without knowing what it did last step."""
+    return env.action_manager.prev_action
+
+
 def target_contact_face_y(env: ManagerBasedRlEnv) -> torch.Tensor:
     cmd = _target_command_or_none(env)
     if cmd is None:
@@ -1471,7 +1560,12 @@ _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
 # that only reach 79-106 mm before tripping tower_damage.
 SUCCESS_CURRICULUM_START = 0.1333   # 2.0 cm
 SUCCESS_CURRICULUM_END = 0.75       # 11.25 cm
-SUCCESS_CURRICULUM_STEPS = 200_000
+# 200k was slower than learning needed at the easy end: the first run reached the
+# maximum attainable return within ~70 iterations at 2 cm and held it all the way
+# through 4.1 cm at iteration 1400. Since a 12-hour job only covers ~1000
+# iterations, that slack costs whole days of wall clock. Raise it again if the
+# return starts lagging the ramp.
+SUCCESS_CURRICULUM_STEPS = 120_000
 TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
 TOUCH_CURRICULUM_BEGIN_STEP = 0
@@ -2240,6 +2334,15 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         ),
         "hook_contact": ObservationTermCfg(
             func=hook_contact_observation,
+        ),
+        "support_presence": ObservationTermCfg(
+            func=target_support_presence,
+        ),
+        "tower_state": ObservationTermCfg(
+            func=tower_state_observation,
+        ),
+        "last_action": ObservationTermCfg(
+            func=last_action,
         ),
     }
 
