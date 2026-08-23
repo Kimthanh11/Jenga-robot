@@ -64,6 +64,13 @@ def main() -> None:
         "friction-critical contact.",
     )
     parser.add_argument("--cone", default=None, help="pyramidal or elliptic.")
+    parser.add_argument(
+        "--success-fraction",
+        type=float,
+        default=0.75,
+        help="Fraction of the block length that counts as extracted, held constant. "
+        "0.75 = 112.5 mm, the full task.",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--csv", default=None)
     args = parser.parse_args()
@@ -89,6 +96,12 @@ def main() -> None:
     cfg.apply_low_level_stage("fixed")
     cfg.YAW_CURRICULUM_START = 0.0
     cfg.YAW_CURRICULUM_END = 0.0
+    # The success distance normally ramps with the training curriculum. A feasibility
+    # measurement must not inherit that: it answers "can this block be extracted", which
+    # means the full distance, not whatever the curriculum happens to start at. Without
+    # this pin every target trivially "succeeds" at the 2 cm curriculum start.
+    cfg.SUCCESS_CURRICULUM_START = args.success_fraction
+    cfg.SUCCESS_CURRICULUM_END = args.success_fraction
     if args.lock_yaw:
         cfg.YAW_TARGET_LIMIT = 0.0
     if args.vertical_slack:
