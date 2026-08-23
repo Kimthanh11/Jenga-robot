@@ -47,6 +47,13 @@ def main() -> None:
         help="Steps to add to the curriculum clock. common_step_counter restarts at 0 "
         "on a resume, so without this a continued run rewinds the difficulty.",
     )
+    parser.add_argument(
+        "--base-relative-shift",
+        action="store_true",
+        help="Measure horizontal block displacement against the tower's base rather "
+        "than the nominal spawn pose, so a rigid slide of the whole tower is not "
+        "counted as damage.",
+    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -60,6 +67,7 @@ def main() -> None:
         cfg.YAW_CURRICULUM_START = 0.0
         cfg.YAW_CURRICULUM_END = 0.0
     cfg.CURRICULUM_STEP_OFFSET = args.curriculum_offset
+    cfg.TOWER_SHIFT_RELATIVE_TO_BASE = args.base_relative_shift
     env_cfg = cfg.jenga_env_cfg()
     env_cfg.scene.num_envs = args.num_envs
 
@@ -75,6 +83,8 @@ def main() -> None:
         run_name += f"_cur{args.success_curriculum_steps}"
     if args.freeze_yaw:
         run_name += "_noyaw"
+    if args.base_relative_shift:
+        run_name += "_baseshift"
     if args.run_suffix:
         run_name += f"_{args.run_suffix}"
     agent_cfg.run_name = run_name
@@ -85,6 +95,7 @@ def main() -> None:
         f"success_curriculum_steps={cfg.SUCCESS_CURRICULUM_STEPS} "
         f"yaw_curriculum=({cfg.YAW_CURRICULUM_START},{cfg.YAW_CURRICULUM_END}) "
         f"curriculum_offset={cfg.CURRICULUM_STEP_OFFSET} "
+        f"base_relative_shift={cfg.TOWER_SHIFT_RELATIVE_TO_BASE} "
         f"num_envs={args.num_envs} iterations={args.iterations}",
         flush=True,
     )
