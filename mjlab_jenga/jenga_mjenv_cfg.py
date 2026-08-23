@@ -2630,7 +2630,11 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     ),
     experiment_name="jenga",
     clip_actions=1.0,
-    save_interval=500,
+    # A 12-hour job reaches roughly 900-1400 iterations, so saving every 500 threw
+    # away 411 iterations when the first run was cut off at 911. This task needs
+    # several chained resume jobs to finish its curriculum, so that loss compounds.
+    # Checkpoints are ~220 KB.
+    save_interval=100,
     num_steps_per_env=32,
     max_iterations=10000,
   )
