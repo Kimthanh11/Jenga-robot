@@ -57,6 +57,13 @@ def main() -> None:
     )
     parser.add_argument("--max-steps", type=int, default=900)
     parser.add_argument("--seeds", default="42")
+    parser.add_argument(
+        "--success-fraction",
+        type=float,
+        default=0.75,
+        help="Fraction of the block length that counts as extracted, held constant. "
+        "0.75 = 112.5 mm, the full task.",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--csv", default=None)
     args = parser.parse_args()
@@ -74,6 +81,8 @@ def main() -> None:
         for impratio in _parse_floats(args.impratio):
             cfg.apply_low_level_stage("fixed")
             cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END = 0.0
+            cfg.SUCCESS_CURRICULUM_START = args.success_fraction
+            cfg.SUCCESS_CURRICULUM_END = args.success_fraction
             env_cfg = cfg.jenga_env_cfg(play=True)
             env_cfg.scene.num_envs = len(targets)
             env_cfg.auto_reset = False
