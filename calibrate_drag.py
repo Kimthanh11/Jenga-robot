@@ -48,6 +48,13 @@ def main() -> None:
         help="Sliding friction values to sweep. Current config samples 0.28-0.48.",
     )
     parser.add_argument("--impratio", default="1.0", help="Comma-separated impratio values.")
+    parser.add_argument(
+        "--solref",
+        default="",
+        help="Comma-separated solref timeconst values for the block geoms (dampratio "
+        "fixed at 1). Empty keeps MuJoCo's default of 0.02. Lower is stiffer; the "
+        "floor is 2 * timestep = 0.004.",
+    )
     parser.add_argument("--cone", default="pyramidal", help="pyramidal and/or elliptic.")
     parser.add_argument(
         "--reference-progress",
@@ -77,8 +84,13 @@ def main() -> None:
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
     rows: list[dict] = []
 
-    for cone in [c.strip() for c in args.cone.split(",") if c.strip()]:
+    solrefs: list[float | None] = _parse_floats(args.solref) or [None]
+
+    for solref in solrefs:
+      for cone in [c.strip() for c in args.cone.split(",") if c.strip()]:
         for impratio in _parse_floats(args.impratio):
+            # solref is baked into the block XML, so it needs a fresh spec each time.
+            cfg.BLOCK_SOLREF = None if solref is None else (solref, 1.0)
             cfg.apply_low_level_stage("fixed")
             cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END = 0.0
             cfg.SUCCESS_CURRICULUM_START = args.success_fraction
@@ -101,7 +113,7 @@ def main() -> None:
                     for seed in seeds:
                         rows.extend(
                             _measure(env, cfg, torch, action, targets,
-                                     cone, impratio, friction, seed, args)
+                                     cone, impratio, friction, seed, args, solref)
                         )
             finally:
                 env.close()
@@ -116,7 +128,7 @@ def main() -> None:
         print(f"Wrote {path}", flush=True)
 
 
-def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, args):
+def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, args, solref=None):
     num_envs = len(targets)
     env.reset(seed=seed)
     cmd = env.command_manager.get_term("target_block")
@@ -184,6 +196,7 @@ def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, a
             "layer": int(name[1:].split("_")[0]),
             "cone": cone,
             "impratio": impratio,
+            "solref": "default" if solref is None else solref,
             "friction": friction,
             "seed": seed,
             "reached_reference": bool(sampled[i].item()) and not bool(damaged_first[i].item()),
@@ -195,7 +208,7 @@ def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, a
         })
         r = rows[-1]
         print(
-            f"cone={cone:<9} impratio={impratio:<5} mu={friction:<5} {name:>5} "
+            f"cone={cone:<9} impratio={impratio:<5} solref={('default' if solref is None else solref)!s:<7} mu={friction:<5} {name:>5} "
             f"drag={r['drag_ratio']:.3f} via {r['drag_block'] or '-':>5} "
             f"at target={r['target_shift_mm']:.1f}mm "
             f"{'(DAMAGE first)' if r['damaged_before_reference'] else ''}",
