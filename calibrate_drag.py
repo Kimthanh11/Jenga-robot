@@ -34,6 +34,24 @@ def _parse_floats(value: str) -> list[float]:
     return [float(item) for item in value.split(",") if item.strip()]
 
 
+def _append_row(csv_path, row) -> None:
+    """Write each measurement as soon as it is taken.
+
+    Writing only at the end means a job that hits its time limit produces nothing at
+    all, which already cost one two-hour evaluation run.
+    """
+    if csv_path is None:
+        return
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
+    with path.open("a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=list(row.keys()), lineterminator="\n")
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Calibrate contact physics via drag ratio.")
     parser.add_argument(
@@ -119,13 +137,7 @@ def main() -> None:
                 env.close()
 
     if args.csv is not None:
-        path = Path(args.csv)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"Wrote {path}", flush=True)
+        print(f"Wrote {Path(args.csv)} ({len(rows)} rows)", flush=True)
 
 
 def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, args, solref=None):
@@ -206,6 +218,7 @@ def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, a
             "drag_block": drag_block[i],
             "steps": int(steps_taken[i].item()),
         })
+        _append_row(args.csv, rows[-1])
         r = rows[-1]
         print(
             f"cone={cone:<9} impratio={impratio:<5} solref={('default' if solref is None else solref)!s:<7} mu={friction:<5} {name:>5} "
