@@ -146,15 +146,29 @@ RANDOM_TARGET_BLOCK_NAMES = (
     "b2_2",
     "b2_3",
     "b3_1",
-    "b6_1",
-    "b6_2",
-    "b6_3",
-    "b7_1",
-    "b7_3",
     "b9_1",
     "b9_2",
     "b9_3",
 )
+# b6_1/2/3 and b7_1/3 were dropped after the contact physics was calibrated out. A
+# target is extractable only if its drag ratio -- how far the worst non-target block
+# travels per unit of target travel -- stays under 12 mm / 112.5 mm = 0.107, and the
+# measured drags predict the scripted sweep exactly:
+#
+#     b3_1  0.098  success        b6_3  0.149  fail
+#     b6_1  0.181  fail           b7_1  0.252  fail
+#
+# The physics was pushed as far as it goes. impratio took the drag from 0.81 to 0.26,
+# which is what made any target solvable at all. Beyond that, friction is nearly
+# irrelevant once the tangential compliance is gone, and a solref sweep over the block
+# geoms found a shallow optimum at 0.01 worth 13 percent (0.232 vs 0.267 at the
+# default) with the tower collapsing outright at 0.04 and above. None of that closes a
+# factor of 2.2, and at drag 0.232 a neighbour still travels 26 mm over a full 112.5 mm
+# extraction against a 12 mm allowance.
+#
+# So this is a property of the task as specified, not a tuning failure: with a 12 mm
+# stability allowance these five blocks cannot be extracted, by a policy or by a
+# perfect scripted push. Revisit if the stability criterion changes.
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
 HOOK_APPROACH_GAP = 0.02
