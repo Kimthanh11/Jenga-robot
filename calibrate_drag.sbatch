@@ -25,6 +25,7 @@ FRICTIONS="${1:-0.10,0.15,0.20,0.28,0.38,0.48}"
 IMPRATIO="${2:-1.0,10.0,30.0}"
 CONE="${3:-pyramidal,elliptic}"
 TARGETS="${4:-b6_1,b6_3,b3_1,b7_1}"
+SOLREF="${5:-}"
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/feasibility
@@ -38,6 +39,7 @@ echo "frictions:   ${FRICTIONS}"
 echo "impratio:    ${IMPRATIO}"
 echo "cone:        ${CONE}"
 echo "targets:     ${TARGETS}"
+echo "solref:      ${SOLREF:-default}"
 
 export WANDB_MODE=disabled
 export MUJOCO_GL=egl
@@ -47,6 +49,7 @@ PYTHONUNBUFFERED=1 ./.venv/bin/python calibrate_drag.py \
   --frictions="${FRICTIONS}" \
   --impratio="${IMPRATIO}" \
   --cone="${CONE}" \
+  ${SOLREF:+--solref="${SOLREF}"} \
   --max-steps 400 \
   --device "cuda:0" \
   --csv "logs/feasibility/calib_drag-${SLURM_JOB_ID:-local}.csv"

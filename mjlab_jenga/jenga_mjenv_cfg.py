@@ -99,6 +99,18 @@ CURRICULUM_STEP_OFFSET = 0
 # missing-block candidate, so the base reference is always intact.
 TOWER_SHIFT_RELATIVE_TO_BASE = False
 
+# Contact softness of the block geoms, as MuJoCo solref = (timeconst, dampratio).
+# None keeps MuJoCo's default (0.02, 1). Lower timeconst means a stiffer contact;
+# MuJoCo clamps it to at least 2 * timestep, so 0.004 is the floor here.
+#
+# This is the remaining lever on the drag ratio. impratio took it from 0.81 to 0.19 by
+# stiffening the FRICTION constraints; solref governs how far the contacts deform in
+# the first place. Success at full extraction needs drag below 0.107 (12 mm of
+# neighbour movement over 112.5 mm of target movement), and the per-target drags
+# predict the sweep outcomes exactly: b3_1 at 0.098 succeeds, b6_3 at 0.149, b6_1 at
+# 0.181 and b7_1 at 0.252 all fail.
+BLOCK_SOLREF: tuple[float, float] | None = None
+
 
 def curriculum_step(env) -> int:
     """Curriculum clock: wall step count plus the resume offset."""
@@ -1086,6 +1098,13 @@ def _get_hook_cfg() -> EntityCfg:
 
 
 
+def _solref_attr() -> str:
+    """XML attribute for BLOCK_SOLREF, or nothing when MuJoCo's default applies."""
+    if BLOCK_SOLREF is None:
+        return ""
+    return f' solref="{BLOCK_SOLREF[0]:g} {BLOCK_SOLREF[1]:g}"'
+
+
 def _get_block_cfg(block_info) -> EntityCfg:
     def _get_block_spec() -> mujoco.MjSpec:
         xml = f"""
@@ -1095,7 +1114,7 @@ def _get_block_cfg(block_info) -> EntityCfg:
     <default>
     <geom density="{block_info["density"]}"
             margin="0"
-            gap="0"/>
+            gap="0"{_solref_attr()}/>
     </default>
 
   <worldbody>
