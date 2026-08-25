@@ -25,8 +25,7 @@ ENTROPY="${6:-}"
 CURSTEPS="${7:-}"
 SUFFIX="${8:-}"
 FREEZEYAW="${9:-}"
-CUROFFSET="${10:-}"
-BASESHIFT="${11:-}"
+BASESHIFT="${10:-}"
 
 if { [ -n "${LOAD_RUN}" ] && [ -z "${CHECKPOINT}" ]; } || { [ -z "${LOAD_RUN}" ] && [ -n "${CHECKPOINT}" ]; }; then
   echo "LOAD_RUN and CHECKPOINT must be passed together" >&2
@@ -57,7 +56,6 @@ if [ -n "${ENTROPY}" ]; then CMD+=(--entropy-coef "${ENTROPY}"); fi
 if [ -n "${CURSTEPS}" ]; then CMD+=(--success-curriculum-steps "${CURSTEPS}"); fi
 if [ -n "${SUFFIX}" ]; then CMD+=(--run-suffix "${SUFFIX}"); fi
 if [ -n "${FREEZEYAW}" ]; then CMD+=(--freeze-yaw); fi
-if [ -n "${CUROFFSET}" ]; then CMD+=(--curriculum-offset "${CUROFFSET}"); fi
 if [ -n "${BASESHIFT}" ]; then CMD+=(--base-relative-shift); fi
 if [ -n "${LOAD_RUN}" ]; then
   CMD+=(--load-run "${LOAD_RUN}" --load-checkpoint "${CHECKPOINT}")
