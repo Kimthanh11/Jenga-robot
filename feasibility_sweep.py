@@ -21,6 +21,24 @@ def _parse_floats(value: str) -> list[float]:
     return [float(item) for item in value.split(",") if item.strip()]
 
 
+def _append_row(csv_path, row) -> None:
+    """Write each case as soon as it is measured.
+
+    A robustness sweep over seeds, frictions and contact points runs for hours; if
+    the Slurm limit lands first, writing only at the end loses everything.
+    """
+    if csv_path is None:
+        return
+    path = Path(csv_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    is_new = not path.exists()
+    with path.open("a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=list(row.keys()), lineterminator="\n")
+        if is_new:
+            writer.writeheader()
+        writer.writerow(row)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Scripted extraction feasibility sweep.")
     parser.add_argument("--targets", default="all")
@@ -156,13 +174,7 @@ def main() -> None:
         env.close()
 
     if args.csv is not None:
-        path = Path(args.csv)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()), lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"Wrote {path}", flush=True)
+        print(f"Wrote {Path(args.csv)} ({len(rows)} rows)", flush=True)
 
 
 def _run_pass(*, env, cfg, torch, action, targets, contact_points, slide_dof,
@@ -318,6 +330,7 @@ def _run_pass(*, env, cfg, torch, action, targets, contact_points, slide_dof,
             "tower_damage": bool(final_damage[env_idx].item()),
             "safe_success": bool(final_success[env_idx].item()),
         })
+        _append_row(args.csv, rows[-1])
         row = rows[-1]
         print(
             f"{row['target']:>5} L{row['layer']} cz={cz:+.2f} "
