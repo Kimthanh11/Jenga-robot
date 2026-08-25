@@ -84,12 +84,6 @@ SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
 LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 
-# Every curriculum is a function of env.common_step_counter, which restarts at 0 on a
-# resumed run -- so continuing a training would silently rewind the difficulty to its
-# starting value. Setting this offset makes a resumed run pick the curriculum up where
-# the previous one stopped.
-CURRICULUM_STEP_OFFSET = 0
-
 # Horizontal block displacement is measured against the nominal spawn pose, so a tower
 # that slides across the floor as one rigid piece counts as damaged even though nothing
 # about it came apart. With this enabled the bottom layer's drift is subtracted first,
@@ -113,8 +107,8 @@ BLOCK_SOLREF: tuple[float, float] | None = None
 
 
 def curriculum_step(env) -> int:
-    """Curriculum clock: wall step count plus the resume offset."""
-    return env.common_step_counter + CURRICULUM_STEP_OFFSET
+    """Return the curriculum clock persisted by the MJLab runner."""
+    return env.common_step_counter
 
 
 MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
