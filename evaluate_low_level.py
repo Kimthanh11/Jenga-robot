@@ -242,9 +242,35 @@ def main() -> None:
         action="store_true",
         help="Load a checkpoint trained before the bounded-std fix.",
     )
+    parser.add_argument(
+        "--yaw-limit",
+        type=float,
+        default=None,
+        help="Override YAW_TARGET_LIMIT (rad). The hook shaft is 80 x 10 mm and the "
+        "slot a removed block leaves is 51 mm wide, so a shaft yawed by t spans "
+        "80*sin(t) + 10*cos(t) across it and stops fitting at 32.1 deg. The default "
+        "limit of 0.6 rad is 34.4 deg, i.e. past that point.",
+    )
+    parser.add_argument(
+        "--freeze-yaw",
+        action="store_true",
+        help="Hold the hook at its home yaw, as train_low_level_stage.py --freeze-yaw does.",
+    )
     parser.add_argument("--impratio", type=float, default=None)
     parser.add_argument("--cone", default=None)
     args = parser.parse_args()
+
+    # Global, read when the env spec is built, so setting them once here is enough.
+    if args.yaw_limit is not None:
+        cfg.YAW_TARGET_LIMIT = args.yaw_limit
+    if args.freeze_yaw:
+        cfg.YAW_CURRICULUM_START = 0.0
+        cfg.YAW_CURRICULUM_END = 0.0
+    print(
+        f"yaw: limit={cfg.YAW_TARGET_LIMIT:.3f} rad "
+        f"({cfg.YAW_TARGET_LIMIT * 57.2957795:.1f} deg) frozen={args.freeze_yaw}",
+        flush=True,
+    )
 
     checkpoint = Path(args.checkpoint)
     targets = _parse_targets(args.targets)
