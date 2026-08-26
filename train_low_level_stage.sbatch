@@ -26,6 +26,7 @@ CURSTEPS="${7:-}"
 SUFFIX="${8:-}"
 FREEZEYAW="${9:-}"
 BASESHIFT="${10:-}"
+TARGETS="${11:-}"
 
 if { [ -n "${LOAD_RUN}" ] && [ -z "${CHECKPOINT}" ]; } || { [ -z "${LOAD_RUN}" ] && [ -n "${CHECKPOINT}" ]; }; then
   echo "LOAD_RUN and CHECKPOINT must be passed together" >&2
@@ -57,6 +58,7 @@ if [ -n "${CURSTEPS}" ]; then CMD+=(--success-curriculum-steps "${CURSTEPS}"); f
 if [ -n "${SUFFIX}" ]; then CMD+=(--run-suffix "${SUFFIX}"); fi
 if [ -n "${FREEZEYAW}" ]; then CMD+=(--freeze-yaw); fi
 if [ -n "${BASESHIFT}" ]; then CMD+=(--base-relative-shift); fi
+if [ -n "${TARGETS}" ]; then CMD+=(--targets "${TARGETS}"); fi
 if [ -n "${LOAD_RUN}" ]; then
   CMD+=(--load-run "${LOAD_RUN}" --load-checkpoint "${CHECKPOINT}")
 fi

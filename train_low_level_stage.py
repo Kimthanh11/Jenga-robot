@@ -47,6 +47,13 @@ def main() -> None:
         "than the nominal spawn pose, so a rigid slide of the whole tower is not "
         "counted as damage.",
     )
+    parser.add_argument(
+        "--targets",
+        default=None,
+        help="Comma-separated target blocks, overriding RANDOM_TARGET_BLOCK_NAMES. "
+        "Repeating a name raises its sampling share, which is how a target the policy "
+        "has written off can be given a concentrated signal without dropping the rest.",
+    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -60,6 +67,10 @@ def main() -> None:
         cfg.YAW_CURRICULUM_START = 0.0
         cfg.YAW_CURRICULUM_END = 0.0
     cfg.TOWER_SHIFT_RELATIVE_TO_BASE = args.base_relative_shift
+    if args.targets:
+        cfg.RANDOM_TARGET_BLOCK_NAMES = tuple(
+            t.strip() for t in args.targets.split(",") if t.strip()
+        )
     env_cfg = cfg.jenga_env_cfg()
     env_cfg.scene.num_envs = args.num_envs
 
@@ -77,6 +88,8 @@ def main() -> None:
         run_name += "_noyaw"
     if args.base_relative_shift:
         run_name += "_baseshift"
+    if args.targets:
+        run_name += "_tgt%d" % len(cfg.RANDOM_TARGET_BLOCK_NAMES)
     if args.run_suffix:
         run_name += f"_{args.run_suffix}"
     agent_cfg.run_name = run_name
@@ -87,6 +100,7 @@ def main() -> None:
         f"success_curriculum_steps={cfg.SUCCESS_CURRICULUM_STEPS} "
         f"yaw_curriculum=({cfg.YAW_CURRICULUM_START},{cfg.YAW_CURRICULUM_END}) "
         f"base_relative_shift={cfg.TOWER_SHIFT_RELATIVE_TO_BASE} "
+        f"targets={cfg.RANDOM_TARGET_BLOCK_NAMES} "
         f"num_envs={args.num_envs} iterations={args.iterations}",
         flush=True,
     )
