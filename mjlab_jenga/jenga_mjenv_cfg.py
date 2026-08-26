@@ -2762,11 +2762,23 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       # four actions in [-1,1]) and an episode return of exactly
       # -0.00005 * 4 * 2000 = -0.40, i.e. pure action-magnitude penalty and nothing else.
       # Bounding std_range is the fix; "log" is better conditioned than "scalar".
+      # std is FIXED, not learned. rsl_rl clamps it with torch.clamp, which has zero
+      # gradient outside the range -- so either bound is a one-way trap: once the
+      # entropy bonus pushes log_std_param past log(1.0), no gradient can bring it
+      # back. That happened twice. entropy_coef=0.002 only stretched the climb: std
+      # was 0.16 at iteration 900, 0.81 at 2840 and pinned at 1.00 from 3440 on,
+      # because the advantage signal weakens as the task gets harder while the entropy
+      # term does not -- the trap closes exactly when the task is hardest.
+      #
+      # At std 1.0 with actions in [-1,1] about a third of samples per dimension clip,
+      # and PPO keeps scoring the unclipped values. 0.2 is what the policy itself
+      # settled on when the entropy term was not dominating.
       distribution_cfg={
         "class_name": "GaussianDistribution",
-        "init_std": 0.25,
+        "init_std": 0.2,
         "std_type": "log",
         "std_range": (0.05, 1.0),
+        "learn_std": False,
       },
     ),
     critic=RslRlModelCfg(
