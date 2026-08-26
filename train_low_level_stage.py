@@ -54,6 +54,13 @@ def main() -> None:
         "Repeating a name raises its sampling share, which is how a target the policy "
         "has written off can be given a concentrated signal without dropping the rest.",
     )
+    parser.add_argument(
+        "--yaw-limit",
+        type=float,
+        default=None,
+        help="Override YAW_TARGET_LIMIT (rad). Beyond 0.56 rad (32.1 deg) the 80 mm "
+        "hook shaft no longer fits into the 51 mm slot the target block vacates.",
+    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -66,6 +73,8 @@ def main() -> None:
     if args.freeze_yaw:
         cfg.YAW_CURRICULUM_START = 0.0
         cfg.YAW_CURRICULUM_END = 0.0
+    if args.yaw_limit is not None:
+        cfg.YAW_TARGET_LIMIT = args.yaw_limit
     cfg.TOWER_SHIFT_RELATIVE_TO_BASE = args.base_relative_shift
     if args.targets:
         cfg.RANDOM_TARGET_BLOCK_NAMES = tuple(
@@ -86,6 +95,8 @@ def main() -> None:
         run_name += f"_cur{args.success_curriculum_steps}"
     if args.freeze_yaw:
         run_name += "_noyaw"
+    if args.yaw_limit is not None:
+        run_name += f"_yaw{args.yaw_limit:g}"
     if args.base_relative_shift:
         run_name += "_baseshift"
     if args.targets:
@@ -101,6 +112,7 @@ def main() -> None:
         f"yaw_curriculum=({cfg.YAW_CURRICULUM_START},{cfg.YAW_CURRICULUM_END}) "
         f"base_relative_shift={cfg.TOWER_SHIFT_RELATIVE_TO_BASE} "
         f"targets={cfg.RANDOM_TARGET_BLOCK_NAMES} "
+        f"yaw_target_limit={cfg.YAW_TARGET_LIMIT} "
         f"num_envs={args.num_envs} iterations={args.iterations}",
         flush=True,
     )
