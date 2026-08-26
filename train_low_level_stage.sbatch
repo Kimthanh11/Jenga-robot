@@ -68,6 +68,5 @@ fi
 # Echo the resolved command line: the startup banner lists only some of the options,
 # which made it impossible to tell from a log whether a run actually had the flags
 # it was launched with.
-printf 'cmd:        %s
-' "${CMD[*]}"
+echo "cmd:        ${CMD[*]}"
 PYTHONUNBUFFERED=1 "${CMD[@]}"
