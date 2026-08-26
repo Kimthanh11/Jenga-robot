@@ -24,7 +24,8 @@ EPISODES="${4:-64}"
 NUM_ENVS="${5:-64}"
 LEGACY="${6:-}"
 IMPRATIO="${7:-}"
-CONE="${8:-}"   # pass "legacy" for checkpoints from before the std fix
+CONE="${8:-}"
+YAWLIMIT="${9:-}"   # rad; "freeze" holds the hook at its home yaw   # pass "legacy" for checkpoints from before the std fix
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
@@ -35,6 +36,7 @@ echo "python:  $(./.venv/bin/python -c 'import sys; print(sys.executable)')"
 echo "cfg:     $(./.venv/bin/python -c 'import mjlab_jenga.jenga_mjenv_cfg as c; print(c.__file__)')"
 
 IFS=',' read -r -a LEVELS <<< "${LEVELS_CSV}"
+echo "yawlimit: ${YAWLIMIT:-default}"
 OUT="logs/eval/eval-${SLURM_JOB_ID}.csv"
 
 export WANDB_MODE=disabled
@@ -50,4 +52,4 @@ PYTHONUNBUFFERED=1 ./.venv/bin/python evaluate_low_level.py \
   --csv "${OUT}" \
   ${LEGACY:+--legacy-distribution} \
   ${IMPRATIO:+--impratio="${IMPRATIO}"} \
-  ${CONE:+--cone="${CONE}"}
+  ${CONE:+--cone="${CONE}"} \n  $([ "${YAWLIMIT}" = "freeze" ] && echo --freeze-yaw) \n  $([ -n "${YAWLIMIT}" ] && [ "${YAWLIMIT}" != "freeze" ] && echo --yaw-limit="${YAWLIMIT}")
