@@ -44,6 +44,14 @@ def main() -> None:
         action="store_true",
         help="Enable the full yaw curriculum during play.",
     )
+    parser.add_argument(
+        "--freeze-yaw",
+        action="store_true",
+        help="Hold the hook at its home yaw, matching train_low_level_stage.py "
+        "--freeze-yaw. Without this the play session still runs the curriculum at its "
+        "start value of 0.10, so a policy trained with the yaw frozen would be watched "
+        "under conditions it never saw.",
+    )
     args = parser.parse_args()
 
     if args.agent == "trained" and not args.checkpoint:
@@ -65,8 +73,18 @@ def main() -> None:
     cfg.RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
     cfg.RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 0.0
     cfg.RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
+    if args.force_yaw and args.freeze_yaw:
+        parser.error("--force-yaw and --freeze-yaw are mutually exclusive")
     if args.force_yaw:
         cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END
+    if args.freeze_yaw:
+        cfg.YAW_CURRICULUM_START = 0.0
+        cfg.YAW_CURRICULUM_END = 0.0
+    print(
+        f"yaw: curriculum=({cfg.YAW_CURRICULUM_START}, {cfg.YAW_CURRICULUM_END}) "
+        f"limit={cfg.YAW_TARGET_LIMIT} rad",
+        flush=True,
+    )
 
     env_cfg = cfg.jenga_env_cfg()
     play_env_cfg = cfg.jenga_env_cfg(play=True)
