@@ -50,10 +50,18 @@ TOUCH_CURRICULUM_BEGIN_STEP = 10_000
 TOUCH_CURRICULUM_STEPS = 50_000
 YAW_CURRICULUM_START = 0.0
 YAW_CURRICULUM_END = 1.0
-YAW_CURRICULUM_BEGIN_STEP = 60_000
-YAW_CURRICULUM_STEPS = 80_000
-YAW_HOME_LIMIT = 1.0                 # rad around the per-env home yaw
-YAW_STEP_SCALE = 0.05                # rad per step at full curriculum
+YAW_CURRICULUM_BEGIN_STEP = 80_000    # was 60_000: give touch more time to stabilize
+YAW_CURRICULUM_STEPS = 150_000        # was 80_000: much more gradual ramp (ends ~230k
+                                       # instead of ~140k steps)
+YAW_HOME_LIMIT = 0.4                  # was 1.0 rad (~57deg): that let the hook grind
+                                       # into the tower edge-on at full yaw deflection --
+                                       # the documented cause of the iter-4083 NaN crash
+                                       # in job 116256 (physics blowup near full yaw
+                                       # scale). 0.4 rad (~23deg) keeps some contact-
+                                       # angle correction while bounding how far off-axis
+                                       # the hook can go (2026-08-27).
+YAW_STEP_SCALE = 0.02                 # was 0.05 rad/step: gentler per-step increments,
+                                       # less abrupt penetration events
 ACTION_CLIP = 1.0
 
 

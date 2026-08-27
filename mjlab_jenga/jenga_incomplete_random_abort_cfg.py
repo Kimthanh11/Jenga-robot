@@ -56,9 +56,17 @@ if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
 
-ABORT_THRESHOLD_START = 0.95   # ~unreachable by random Gaussian noise (init_std=1.0)
-ABORT_THRESHOLD_END = 0.6
+ABORT_THRESHOLD_START = 0.98   # raw_action is clamped to [-1,1] -- 0.95 is NOT a rare
+ABORT_THRESHOLD_END = 0.7      # tail value for a ~2-3 std policy, checked every step
 ABORT_CURRICULUM_STEPS = 100_000
+ABORT_HOLD_STEPS = 10           # require this many CONSECUTIVE over-threshold steps.
+# Single-sample thresholding over a ~2000-step episode makes an accidental crossing
+# almost certain regardless of threshold (P(any hit) = 1-(1-p)^2000). Requiring a
+# sustained run of ABORT_HOLD_STEPS drops accidental-trigger probability to ~p^10,
+# forcing the policy to actually commit to the signal rather than get flagged by one
+# lucky noise sample. Confirmed the bug in practice: job 138899 (single-sample,
+# threshold~0.92 by iter ~286) already showed Episode_Termination/abort=27% -- far
+# too high to be a learned decision this early (2026-08-27).
 ABORT_PENALTY_WEIGHT = -2.0     # mild: well below -100 (tower_large_pertub), non-zero
 ACTION_CLIP = 1.0
 
@@ -71,13 +79,40 @@ def abort_threshold_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.tensor(scale, device=env.device)
 
 
-def abort_triggered(env: ManagerBasedRlEnv) -> torch.Tensor:
-    abort_action = env.action_manager.get_term("abort").raw_action[:, 0]
-    return abort_action > abort_threshold_curriculum(env)
+class AbortTriggered:
+    """Stateful bool signal: fires only after ABORT_HOLD_STEPS consecutive steps with
+    the abort action over the (curriculum-ramped) threshold. Lazily sized on first
+    call, since cfg construction happens before `env`/num_envs exist -- mirrors
+    DeltaBlockProgressReward's pattern above in the base (v1) file."""
+
+    def __init__(self) -> None:
+        self._hold: torch.Tensor | None = None
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        abort_action = env.action_manager.get_term("abort").raw_action[:, 0]
+        if self._hold is None:
+            self._hold = torch.zeros_like(abort_action, dtype=torch.long)
+        over = abort_action > abort_threshold_curriculum(env)
+        self._hold = torch.where(over, self._hold + 1, torch.zeros_like(self._hold))
+        return self._hold >= ABORT_HOLD_STEPS
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if self._hold is None:
+            return
+        if env_ids is None:
+            env_ids = slice(None)
+        self._hold[env_ids] = 0
 
 
-def abort_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
-    return abort_triggered(env).float()
+class AbortRewardSignal(AbortTriggered):
+    """Same hold-counter logic as AbortTriggered, exposed as float for reward/metric
+    terms. Deliberately a SEPARATE instance from the termination's: both are pure
+    functions of the same per-step inputs (raw_action, curriculum threshold) and each
+    gets called exactly once per step by its own manager, so independent instances
+    stay in lockstep without needing to share mutable state or coordinate call order."""
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        return super().__call__(env).float()
 
 
 def tower_shift_obs(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -133,17 +168,17 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     cfg.actions["abort"] = AbortSignalActionCfg(entity_name="hook")
 
     cfg.terminations["abort"] = TerminationTermCfg(
-        func=abort_triggered,
+        func=AbortTriggered(),
         time_out=True,
     )
 
     cfg.rewards["abort_penalty"] = RewardTermCfg(
-        func=abort_reward,
+        func=AbortRewardSignal(),
         weight=ABORT_PENALTY_WEIGHT,
     )
 
     cfg.metrics["abort_rate_mean"] = MetricsTermCfg(
-        func=abort_reward,
+        func=AbortRewardSignal(),
         reduce="mean",
     )
 
