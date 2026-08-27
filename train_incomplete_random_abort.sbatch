@@ -1,5 +1,5 @@
 #!/bin/bash
-# Train the incomplete-tower + random-block ABORT policy (v1 base + abort action).
+# Train the incomplete-tower + random-block ABORT policy (v2 base: live touch/yaw + abort action).
 #   sbatch train_incomplete_random_abort.sbatch            # defaults: 6000 iters, 256 envs
 #   sbatch train_incomplete_random_abort.sbatch 6000 256   # iters, num_envs
 # NOTE: 256 envs — that is what fits in GPU memory for this tower. Do NOT raise.
@@ -31,12 +31,12 @@ export MUJOCO_GL=egl
 
 PYTHONUNBUFFERED=1 "${VENV_PY}" train.py Mjlab-Jenga-IncompleteRandomAbort \
   --agent.logger tensorboard \
-  --agent.experiment-name jenga_incomplete_randblock_abort \
+  --agent.experiment-name jenga_incomplete_randblock_abort_v2 \
   --agent.max-iterations "${ITERS}" \
   --env.scene.num-envs "${NUM_ENVS}"
 
 # Publish the newest checkpoint of this run to the shared checkpoint dir.
-RUN_DIR="$(ls -dt logs/rsl_rl/jenga_incomplete_randblock_abort/*/ | head -1)"
+RUN_DIR="$(ls -dt logs/rsl_rl/jenga_incomplete_randblock_abort_v2/*/ | head -1)"
 LAST_MODEL="$(ls -t "${RUN_DIR}"model_*.pt | head -1)"
 cp "${LAST_MODEL}" \
-  "${SHARED_CKPT_DIR}/jenga_incomplete_randblock_abort_$(basename "${RUN_DIR}")_$(basename "${LAST_MODEL}")"
+  "${SHARED_CKPT_DIR}/jenga_incomplete_randblock_abort_v2_$(basename "${RUN_DIR}")_$(basename "${LAST_MODEL}")"

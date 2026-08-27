@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 # =====================================================================================
-# ABORT variant of the incomplete-tower + random-block task (v1 base, no touch/yaw).
+# ABORT variant of the incomplete-tower + random-block task, built on V2 (task-frame
+# touch/yaw), NOT v1.
+#
+# v1 (jenga_incomplete_random_cfg.py) is a known-broken baseline: its touch_y/touch_z/
+# yaw actions are frozen RelativeJointPositionActionCfg(scale=0.000) placeholders,
+# which let the hook's y/z servo target passively drift with whatever the joint gets
+# pushed to by contact forces instead of holding a rigid setpoint -- the hook can
+# never sustain contact against the block face. Confirmed by job 133345 (this file's
+# first version, v1-based): 6000 iters, success_mean=0.00000, progress_mean~0 the
+# whole run -- identical to the documented old v1/randblock failure (job 116239).
+# v2 replaced the frozen placeholders with live, curriculum-gated TaskFrameTouchAction/
+# TaskFrameYawAction that hold a real home-relative PD setpoint, which is why we build
+# on it here instead.
 #
 # From Discord (Boris, 23.07.2026): give the policy an option to abort pushing the
 # currently-selected block if the tower looks unsafe, rather than being forced to
 # keep going until success/topple/timeout — and don't punish too much for choosing to
 # abort and move on to another block.
 #
-# Mechanically this needs three additions on top of v1:
-#   * A "tower_shift" observation (base.tower_com_shift was already computed for
+# Mechanically this needs three additions on top of v2:
+#   * A "tower_shift" observation (v1.tower_com_shift was already computed for
 #     reward shaping, but was never exposed to the policy — without it there's
 #     nothing for an abort decision to be grounded in).
 #   * A 1-dim "abort" action that drives nothing physically; a termination reads it.
@@ -25,6 +37,7 @@ from __future__ import annotations
 # =====================================================================================
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -36,9 +49,10 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 
-from mjlab_jenga import jenga_incomplete_random_cfg as base
+from mjlab_jenga import jenga_incomplete_random_cfg as v1
+from mjlab_jenga import jenga_incomplete_random_v2_cfg as base
 
-if base.TYPE_CHECKING:
+if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
 
@@ -67,8 +81,8 @@ def abort_reward(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def tower_shift_obs(env: ManagerBasedRlEnv) -> torch.Tensor:
-    # base.tower_com_shift is (num_envs,); observation terms need a feature dim.
-    return base.tower_com_shift(env).unsqueeze(-1)
+    # v1.tower_com_shift is (num_envs,); observation terms need a feature dim.
+    return v1.tower_com_shift(env).unsqueeze(-1)
 
 
 @dataclass(kw_only=True)
@@ -148,7 +162,7 @@ def jenga_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     cfg = base.jenga_ppo_runner_cfg()
-    cfg.experiment_name = "jenga_incomplete_randblock_abort"
+    cfg.experiment_name = "jenga_incomplete_randblock_abort_v2"
     return cfg
 
 
