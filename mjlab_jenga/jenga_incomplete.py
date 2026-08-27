@@ -798,14 +798,15 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             # (shared across all worlds), njmax is PER-WORLD and drives a dense
             # constraint Jacobian (nworld, njmax, nv) -- with nv~148 for this tower,
             # 4096 was ~28x oversized and was the actual num_envs ceiling (CUDA-graph
-            # OOM above ~800 envs on an 11GB 2080 Ti). njmax=512 builds fine but a real
-            # training run at 1536 envs overflows it ("nefc overflow - please increase
-            # njmax to ~576-596"), silently corrupting into NaN observations -- a
-            # build+step smoke test does NOT generate enough contacts to catch this,
-            # only real RL exploration does. 768 (~30% headroom over the observed
-            # peak) verified stable in an actual training run (2026-08-21).
+            # OOM above ~800 envs on an 11GB 2080 Ti). A build+step smoke test does NOT
+            # generate enough contacts to size njmax correctly -- only real RL
+            # exploration does. 512 and 768 both overflowed ("nefc overflow - please
+            # increase njmax to ...") before a single training iteration completed at
+            # 1536 envs, peaking ~900 just from a freshly-reset full 27-block tower
+            # (not training-induced instability -- it never got that far). 2048 (~2x
+            # that peak) -- pending a real training run to confirm (2026-08-21).
             nconmax=1024,
-            njmax=768,
+            njmax=2048,
             mujoco=MujocoCfg(timestep=0.002),
         ),
         decimation=5,
