@@ -59,14 +59,20 @@ if TYPE_CHECKING:
 ABORT_THRESHOLD_START = 0.98   # raw_action is clamped to [-1,1] -- 0.95 is NOT a rare
 ABORT_THRESHOLD_END = 0.7      # tail value for a ~2-3 std policy, checked every step
 ABORT_CURRICULUM_STEPS = 100_000
-ABORT_HOLD_STEPS = 10           # require this many CONSECUTIVE over-threshold steps.
+ABORT_HOLD_STEPS = 100          # require this many CONSECUTIVE over-threshold steps.
 # Single-sample thresholding over a ~2000-step episode makes an accidental crossing
 # almost certain regardless of threshold (P(any hit) = 1-(1-p)^2000). Requiring a
-# sustained run of ABORT_HOLD_STEPS drops accidental-trigger probability to ~p^10,
-# forcing the policy to actually commit to the signal rather than get flagged by one
-# lucky noise sample. Confirmed the bug in practice: job 138899 (single-sample,
+# sustained run of ABORT_HOLD_STEPS drops accidental-trigger probability to ~p^HOLD.
+# HOLD=10 was still std-sensitive: at threshold 0.98, single-step P(hit) is ~16% at
+# std=1 but ~42% at std=5 (we've observed std that high) -- 0.42^10 ~= 1.7e-4/step,
+# still ~33% per 2000-step episode at the higher end. HOLD=100 makes it std-agnostic:
+# even 0.42^100 ~= 1e-37, negligible at any std the policy could plausibly learn.
+# Confirmed the original (no hold at all) bug in practice: job 138899 (single-sample,
 # threshold~0.92 by iter ~286) already showed Episode_Termination/abort=27% -- far
-# too high to be a learned decision this early (2026-08-27).
+# too high to be a learned decision this early. Cost: ~1s confirmation delay (100
+# steps of a max ~20s/2000-step episode, 5%) before an abort actually ends the
+# episode -- acceptable since the push actions should also be easing off if the
+# policy is genuinely trying to stop (2026-08-27).
 ABORT_PENALTY_WEIGHT = -2.0     # mild: well below -100 (tower_large_pertub), non-zero
 ACTION_CLIP = 1.0
 
