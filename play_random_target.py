@@ -27,6 +27,15 @@ def main() -> None:
         help="Use zero to inspect reset/teleport positions without a policy.",
     )
     parser.add_argument("--viewer", default="native")
+    parser.add_argument(
+        "--video",
+        action="store_true",
+        help="Render to an mp4 instead of an interactive window. Playback is bound by "
+        "the physics, not the display, so this is the usable route on a machine "
+        "without a CUDA GPU: render on the cluster and download the file.",
+    )
+    parser.add_argument("--video-length", type=int, default=1000)
+    parser.add_argument("--camera", default=None)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument(
@@ -110,6 +119,9 @@ def main() -> None:
             viewer=args.viewer,
             num_envs=args.num_envs,
             device=args.device,
+            video=args.video,
+            video_length=args.video_length,
+            camera=args.camera,
         ),
     )
 
