@@ -1,29 +1,41 @@
-from __future__ import annotations
+"""Calibrate MuJoCo contact parameters using the drag ratio of the Jenga tower.
 
-# =====================================================================================
-# Contact / friction calibration against a physical target: the DRAG RATIO.
-#
-#   drag ratio = (largest horizontal displacement of any NON-target block)
-#                / (horizontal displacement of the target block)
-#              , sampled when the target has moved a fixed reference distance.
-#
-# Why this metric: in real Jenga, pushing a block out barely moves the blocks above it.
-# The block resting on the layer above spans three stones; the friction from the target
-# acts on roughly a third of its underside while the other two thirds hold it under the
-# same load. So the drag ratio should be small -- a few percent. Measured here it is
-# 0.89 two layers above the target (b6_1 -> b8_1), i.e. the stack behaves more like a
-# glued solid than a pile of loose blocks. That is what makes tower_damage (25 mm for
-# ANY non-target block) fire at ~28 mm of target progress, which is why 12 of 14 targets
-# are unextractable.
-#
-# The point of this script is to find friction / contact settings that bring the drag
-# ratio into a physically sensible range, BEFORE deciding the RL target set.
-#
-# Note on impratio: it turned out to be the dominant knob, and in the opposite direction
-# to the guess above it. At impratio=1 friction constraints are as soft as normal ones,
-# so the stack shears elastically; stiffening them (10-30) cut the drag ratio from 0.81
-# to 0.19. Friction itself barely matters once the compliance is gone.
-# =====================================================================================
+The drag ratio quantifies how strongly the tower is dragged along when a block is
+pushed out of it:
+
+    drag ratio = max horizontal displacement over all non-target blocks
+                 / horizontal displacement of the target block
+
+sampled once the target has travelled a fixed reference distance.
+
+A physical tower yields a small ratio. The block resting on the layer above spans
+three stones, so friction from the target acts on roughly one third of its underside
+while the remaining two thirds hold it under the same load.
+
+The ratio bounds which blocks are extractable. A safe success requires every
+non-target block to stay within TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT (12 mm)
+while the target travels the full success distance (112.5 mm), so the feasibility
+threshold is 12 / 112.5 = 0.107. Measured ratios reproduce the outcome of the
+scripted sweep in feasibility_sweep.py.
+
+Measured parameter sensitivities, pyramidal cone, default solref:
+
+    impratio    1     drag 0.664   (0.896 at mu = 0.48)
+    impratio   10     drag 0.302
+    impratio   30     drag 0.251   (0.194 at mu = 0.48)
+
+`impratio` is the stiffness of friction constraints relative to normal ones. At the
+MuJoCo default of 1 both are equally compliant and the stack shears elastically. The
+friction coefficient shifts the ratio by up to a factor of two, but the direction
+depends on `impratio` -- rising with mu at impratio 1, falling at impratio 30 -- so it
+cannot compensate for an incorrect stiffness. The elliptic cone yields ratios above
+1.9 at every stiffness and destroys the tower during the reset settle in half of all
+runs.
+
+Emits one CSV row per (target, cone, impratio, solref, friction, seed) combination.
+"""
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -35,10 +47,14 @@ def _parse_floats(value: str) -> list[float]:
 
 
 def _append_row(csv_path, row) -> None:
-    """Write each measurement as soon as it is taken.
+    """Append one result row to the CSV, creating the file and header if needed.
 
-    Writing only at the end means a job that hits its time limit produces nothing at
-    all, which already cost one two-hour evaluation run.
+    Rows are written as they are produced rather than buffered until the end, so that
+    a run terminated by its scheduler time limit still yields the cases it completed.
+
+    Args:
+        csv_path: Destination path, or None to disable writing.
+        row: Mapping of column name to value; its keys define the header.
     """
     if csv_path is None:
         return
@@ -160,10 +176,10 @@ def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, a
     damaged_first = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
     steps_taken = torch.zeros(num_envs, dtype=torch.long, device=env.device)
 
-    # Envs are frozen once sampled instead of being left to run and terminate again.
-    # Every reset fires randomize_block_physics (27x geom_friction + 27x pseudo_inertia
-    # with a full model-constant recompute), so letting sampled envs churn made this
-    # measurement cost hours instead of minutes.
+    # A sampled environment is frozen by zeroing its action rather than allowed to
+    # terminate and reset. Each reset invokes randomize_block_physics, which rewrites
+    # geom_friction and pseudo_inertia for all 27 blocks and triggers a full model
+    # constant recompute; repeated resets dominate the runtime of the sweep.
     live_action = action.clone()
 
     for step in range(1, args.max_steps + 1):

@@ -1,22 +1,30 @@
-from __future__ import annotations
+"""Open-loop extraction test for a single Jenga target block.
 
-# =====================================================================================
-# Feasibility test for a single target block.
-#
-# The previous version pushed for a fixed 180 steps and reported passed=True as soon as
-# ANY contact was seen. That is not an extraction test:
-#
-#   * 180 steps at 100 Hz and 0.03 m/s are 54 mm of commanded travel, and ~73 of those
-#     steps are spent closing the 20 mm approach gap. So at most ~32 mm were reachable,
-#     while a success needs 112.5 mm. The test could never observe a success.
-#   * It logged the CONTACT SENSOR force, not the actuator force, so "is the actuator at
-#     its stall force?" was unanswerable.
-#
-# This version pushes until the episode actually terminates (success / tower damage), or
-# until progress stalls, or until a hard step cap, and reports the reason. It logs both
-# the actuator force on hook_slide and the contact force, which is what separates
-# "actuator is maxed out" from "the tip is losing contact".
-# =====================================================================================
+Drives the hook with a constant push command and runs until the episode terminates,
+reporting which terminal condition was reached. This serves as a feasibility oracle:
+a block that a straight scripted push cannot extract is unlikely to be a viable
+reinforcement learning target, and establishing that costs seconds rather than GPU
+hours.
+
+Terminal conditions, reported as `reason`:
+
+    success     the target reached the success distance with the tower stable
+    damage      a non-target block exceeded a tower_damage threshold
+    stalled     no significant progress for STALL_PATIENCE steps
+    step_cap    the hard step limit was reached without a terminal condition
+
+The distinction between `stalled` and `step_cap` matters: without it, "the block is
+stuck" cannot be told apart from "the test budget was too small". Extraction requires
+112.5 mm of travel, which at 100 Hz and 0.03 m/s is 375 contact steps plus roughly 73
+steps to close the 20 mm approach gap. Targets with high slip need considerably more,
+so a fixed budget is not a valid test.
+
+Both the actuator force on hook_slide and the contact sensor force are recorded. The
+two separate an actuator saturated at its stall force from a tip that is losing
+contact; the contact force alone cannot distinguish them.
+"""
+
+from __future__ import annotations
 
 import argparse
 import math

@@ -1,3 +1,16 @@
+"""Train one low-level extraction stage with PPO.
+
+Stages are selected by name and configure target sampling and missing-block
+randomization via cfg.apply_low_level_stage(): "fixed" and "target" train on the
+complete tower, "missing1" through "missing3" progressively introduce towers with
+blocks already removed.
+
+Command-line overrides exist for the settings that are varied between runs -- entropy
+coefficient, curriculum length, target set, yaw limit and yaw freezing -- so that a
+comparison does not require editing the configuration module. The resolved command line
+is echoed by the accompanying sbatch script.
+"""
+
 from __future__ import annotations
 
 import argparse

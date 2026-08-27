@@ -1,16 +1,23 @@
-from __future__ import annotations
+"""Vectorized feasibility sweep over candidate target blocks.
 
-# =====================================================================================
-# Vectorized feasibility sweep: which target blocks can a scripted full push actually
-# extract, and at what actuator force?
-#
-# One env per (target, contact point); friction and seed are swept as repeated passes
-# over the same env, because randomize_block_physics reads the friction range from the
-# module globals at reset time.
-#
-# The point of this script is to decide what belongs in the RL curriculum. A block the
-# scripted controller cannot extract must not be a training target.
-# =====================================================================================
+Determines which blocks a scripted full push can extract and at what actuator force,
+across contact points, friction values and seeds. The result defines the target set
+admitted to reinforcement learning: a block the open-loop controller cannot extract is
+not a viable training target.
+
+Layout: one environment per (target, contact point). Friction and seed are swept as
+repeated passes over the same environments rather than as additional environments,
+because randomize_block_physics reads the friction range from the module globals at
+reset time and therefore cannot vary within a batch.
+
+The per-environment target assignment is read back from the command term and asserted
+against the requested list. Without that check a silently ignored force_target_names
+produces a full sweep of plausible-looking rows measured on randomly chosen blocks.
+
+Emits one CSV row per (target, contact point, friction, seed) combination.
+"""
+
+from __future__ import annotations
 
 import argparse
 import csv
@@ -22,10 +29,14 @@ def _parse_floats(value: str) -> list[float]:
 
 
 def _append_row(csv_path, row) -> None:
-    """Write each case as soon as it is measured.
+    """Append one result row to the CSV, creating the file and header if needed.
 
-    A robustness sweep over seeds, frictions and contact points runs for hours; if
-    the Slurm limit lands first, writing only at the end loses everything.
+    Rows are written as they are produced rather than buffered until the end, so that
+    a run terminated by its scheduler time limit still yields the cases it completed.
+
+    Args:
+        csv_path: Destination path, or None to disable writing.
+        row: Mapping of column name to value; its keys define the header.
     """
     if csv_path is None:
         return
@@ -69,17 +80,18 @@ def main() -> None:
         "--vertical-slack",
         type=float,
         default=0.0,
-        help="Metres added to both vertical tower limits. Proxy for pre-settling the "
-        "tower: the stability baseline is the nominal spawn pose, but the tower drops "
-        "~5.4 mm below it immediately, so the budget is spent before the policy acts.",
+        help="Metres added to both vertical tower limits, as a proxy for a "
+        "pre-settled tower. The stability criteria are evaluated against the nominal "
+        "spawn pose, but the tower settles about 5.4 mm below it within the first "
+        "steps of an episode, consuming part of the allowance before the policy acts.",
     )
     parser.add_argument(
         "--impratio",
         type=float,
         default=None,
-        help="Override MuJoCo impratio. Measured drag ratio on b6_1: 0.81 at 1.0 "
-        "(the default), 0.32 at 10, 0.23 at 30. MuJoCo recommends 10-100 for "
-        "friction-critical contact.",
+        help="Override the MuJoCo impratio of the configuration. Mean drag ratio "
+        "over the calibration targets: 0.664 at 1.0 (the MuJoCo default), 0.302 at "
+        "10, 0.251 at 30. MuJoCo recommends 10-100 for friction-critical contact.",
     )
     parser.add_argument("--cone", default=None, help="pyramidal or elliptic.")
     parser.add_argument(
