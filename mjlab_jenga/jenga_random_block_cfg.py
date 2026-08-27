@@ -1037,7 +1037,13 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       clip_param=0.2,
       entropy_coef=0.01,
       num_learning_epochs=5,
-      num_mini_batches=4,
+      # 4 was tuned for 256 envs (minibatch=256*32/4=2048). We bumped num_envs to
+      # 1536 (nconmax/njmax investigation, 2026-08-21) without retuning this --
+      # minibatch grew to 12288, and two independent 1536-env abort runs (jobs
+      # 138924/138936) diverged in action std (7->22+) starting well before any
+      # curriculum (touch/yaw/abort) was even active, ruling those out. 24 restores
+      # the original 2048 minibatch size (2026-08-27).
+      num_mini_batches=24,
       learning_rate=1.0e-3,
       schedule="adaptive",
       gamma=0.99,
