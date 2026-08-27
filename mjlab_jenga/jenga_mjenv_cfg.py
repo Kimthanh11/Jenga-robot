@@ -1,3 +1,30 @@
+"""Manager-based MuJoCo environment for learning Jenga block extraction.
+
+Defines the nine-layer tower of 27 rigid blocks, the hook-shaped tool, and the
+observation, action, reward, termination and event terms that make up the task, along
+with the PPO runner configuration.
+
+The task is a single extraction: a target block is sampled at reset, the hook is placed
+at a scripted target-specific home pose, and the policy pushes the block out while the
+remainder of the tower must stay within its stability limits. Observations and actions
+are expressed in a frame local to the selected block, so one policy applies to blocks
+in different layers and orientations.
+
+Action space (4 dimensions):
+    0    push / stop / retreat, mapped to the hook_slide velocity actuator
+    1-2  contact point on the target block face
+    3    incremental hook yaw
+
+Curricula are driven by env.common_step_counter, which mjlab persists across resumes:
+the success distance ramps from SUCCESS_CURRICULUM_START to SUCCESS_CURRICULUM_END, and
+apply_low_level_stage() selects the target-sampling and missing-block regime for a
+training stage.
+
+Companion scripts: train_low_level_stage.py trains a stage, evaluate_low_level.py
+produces per-target deterministic statistics, feasibility_sweep.py and calibrate_drag.py
+establish which targets and contact parameters are admissible.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -144,25 +171,27 @@ RANDOM_TARGET_BLOCK_NAMES = (
     "b9_2",
     "b9_3",
 )
-# b6_1/2/3 and b7_1/3 were dropped after the contact physics was calibrated out. A
-# target is extractable only if its drag ratio -- how far the worst non-target block
-# travels per unit of target travel -- stays under 12 mm / 112.5 mm = 0.107, and the
-# measured drags predict the scripted sweep exactly:
+# Candidate blocks are admitted only if a scripted push can extract them safely. A
+# safe success requires every non-target block to remain within
+# TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT while the target travels the full success
+# distance, giving a drag-ratio threshold of 12 / 112.5 = 0.107. Measured drag ratios
+# reproduce the outcome of the scripted sweep in feasibility_sweep.py:
 #
-#     b3_1  0.098  success        b6_3  0.149  fail
-#     b6_1  0.181  fail           b7_1  0.252  fail
+#     b3_1  0.098  extractable        b6_3  0.149  not extractable
+#     b6_1  0.181  not extractable    b7_1  0.252  not extractable
 #
-# The physics was pushed as far as it goes. impratio took the drag from 0.81 to 0.26,
-# which is what made any target solvable at all. Beyond that, friction is nearly
-# irrelevant once the tangential compliance is gone, and a solref sweep over the block
-# geoms found a shallow optimum at 0.01 worth 13 percent (0.232 vs 0.267 at the
-# default) with the tower collapsing outright at 0.04 and above. None of that closes a
-# factor of 2.2, and at drag 0.232 a neighbour still travels 26 mm over a full 112.5 mm
-# extraction against a 12 mm allowance.
+# b6_1, b6_2, b6_3, b7_1 and b7_3 exceed the threshold and are excluded. Contact
+# parameters were calibrated first (see calibrate_drag.py): impratio reduced the drag
+# ratio from 0.81 to 0.26, which is what makes any target solvable. Beyond that, a
+# solref sweep over the block geoms yields a shallow optimum at 0.01 worth 13 percent
+# (0.232 against 0.267 at the default), with the simulation diverging at 0.04 and
+# above. That does not close the remaining factor of 2.2: at a drag ratio of 0.232 a
+# neighbouring block still travels 26 mm over a full 112.5 mm extraction against a
+# 12 mm allowance.
 #
-# So this is a property of the task as specified, not a tuning failure: with a 12 mm
-# stability allowance these five blocks cannot be extracted, by a policy or by a
-# perfect scripted push. Revisit if the stability criterion changes.
+# The exclusion is thus a consequence of the task specification rather than of
+# insufficient tuning. Under a 12 mm stability allowance these five blocks cannot be
+# extracted by any controller. Revisit if the stability criterion changes.
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
 HOOK_APPROACH_GAP = 0.02
@@ -2615,31 +2644,34 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         sim=SimulationCfg(
             nconmax=4096,
             njmax=4096,
-            # impratio is the stiffness of friction constraints relative to normal
-            # ones. At MuJoCo's default of 1.0 they are equally soft, so contacts creep
-            # tangentially well below the friction limit and the whole tower shears:
-            # pushing b6_1 moved b8_1 -- two layers up -- by 89% as far, and twisted the
-            # top of the tower by 8.45 deg. tower_damage (25 mm for any non-target block)
-            # then fired at ~28 mm of target progress against a 112.5 mm success
-            # distance, leaving 12 of 14 targets unextractable.
+            # impratio is the stiffness of friction constraints relative to
+            # normal ones. At MuJoCo's default of 1.0 the two are equally compliant,
+            # so contacts creep tangentially well below the friction limit and the
+            # tower shears as a unit: pushing b6_1 displaces b8_1, two layers above,
+            # by 89% as far, and twists the top of the tower by 8.45 deg. Since
+            # tower_damage triggers at 25 mm for any non-target block, it fires at
+            # roughly 28 mm of target progress against a success distance of
+            # 112.5 mm, leaving 12 of 14 targets unextractable.
             #
-            # Measured mean drag ratio over b6_1/b6_3/b3_1/b7_1 (pyramidal cone):
+            # Mean drag ratio over b6_1, b6_3, b3_1 and b7_1, pyramidal cone:
             #
             #        mu     impratio=1   impratio=10   impratio=30
             #      0.20          0.566         0.323         0.270
             #      0.28          0.615         0.272         0.196
             #      0.48          0.896         0.285         0.194
             #
-            # Note the sign flip: at impratio=1 more friction means more drag, because
-            # what is being measured is compliance scaling with contact load. Once the
-            # compliance is gone, more friction means less drag -- the neighbours hold
-            # each other. So the existing friction range is already right; impratio was
-            # the wrong parameter. 30 sits inside MuJoCo's recommended 10-100 band for
-            # friction-critical contact. Extractable targets went from 2/14 to 7/14.
+            # The sign of the friction dependence flips. At impratio=1 higher friction
+            # increases drag, because the quantity measured is compliance scaling with
+            # contact load. Once that compliance is removed, higher friction decreases
+            # drag, as neighbouring blocks hold one another. The configured friction
+            # range is therefore appropriate and impratio is the parameter that
+            # required correction. A value of 30 lies inside MuJoCo's recommended
+            # range of 10-100 for friction-critical contact and raises the number of
+            # extractable targets from 2 to 7 of 14.
             #
-            # elliptic cone was measured too and is unusable here: it pushes the reset
-            # settling transient past the damage limit (tower_damage fires at step 6
-            # with the target unmoved) and locks other targets solid.
+            # The elliptic cone is unusable here: it drives the reset settling
+            # transient past the damage limit, with tower_damage firing at step 6
+            # while the target is still stationary.
             mujoco=MujocoCfg(timestep=0.002, impratio=30.0),
         ),
         decimation=5,
@@ -2755,24 +2787,26 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       # The critic reads 81 raw block coordinates alongside joint angles and contact
       # forces, which span very different scales.
       obs_normalization=True,
-      # rsl_rl defaults std_range to (1e-6, 1e6) and learns std, while the entropy
-      # bonus pushes it up and clip_actions clips only AFTER sampling -- so PPO keeps
-      # scoring log-probs of samples that all execute as the same boundary action.
-      # Observed std of 117 and 743, with mean action norm exactly 2.0 (the maximum for
-      # four actions in [-1,1]) and an episode return of exactly
-      # -0.00005 * 4 * 2000 = -0.40, i.e. pure action-magnitude penalty and nothing else.
-      # Bounding std_range is the fix; "log" is better conditioned than "scalar".
-      # std is FIXED, not learned. rsl_rl clamps it with torch.clamp, which has zero
-      # gradient outside the range -- so either bound is a one-way trap: once the
-      # entropy bonus pushes log_std_param past log(1.0), no gradient can bring it
-      # back. That happened twice. entropy_coef=0.002 only stretched the climb: std
-      # was 0.16 at iteration 900, 0.81 at 2840 and pinned at 1.00 from 3440 on,
-      # because the advantage signal weakens as the task gets harder while the entropy
-      # term does not -- the trap closes exactly when the task is hardest.
+      # The standard deviation is fixed rather than learned.
       #
-      # At std 1.0 with actions in [-1,1] about a third of samples per dimension clip,
-      # and PPO keeps scoring the unclipped values. 0.2 is what the policy itself
-      # settled on when the entropy term was not dominating.
+      # rsl_rl defaults std_range to (1e-6, 1e6) and constrains std with torch.clamp,
+      # whose gradient is zero outside the range. Either bound is therefore absorbing:
+      # once the entropy bonus drives log_std_param past log(1.0) no gradient returns
+      # it. Because clip_actions is applied after sampling, PPO continues to evaluate
+      # log-probabilities of samples that all execute as the same boundary action.
+      #
+      # Unbounded, this produced standard deviations of 117 and 743, a mean action norm
+      # of exactly 2.0 -- the maximum for four actions in [-1, 1] -- and an episode
+      # return of exactly -0.00005 * 4 * 2000 = -0.40, that is the action-magnitude
+      # penalty alone.
+      #
+      # At std 1.0 with actions in [-1, 1] roughly a third of samples per dimension are
+      # clipped. 0.2 is the value the policy converged to when the entropy term was not
+      # dominating.
+      #
+      # Note for resumed runs: load_state_dict overwrites init_std with the value
+      # stored in the checkpoint, and requires_grad=False then pins it. Use
+      # fix_checkpoint_std.py before resuming from a checkpoint with a saturated std.
       distribution_cfg={
         "class_name": "GaussianDistribution",
         "init_std": 0.2,
@@ -2790,10 +2824,12 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       value_loss_coef=1.0,
       use_clipped_value_loss=True,
       clip_param=0.2,
-      # A/B at equal iteration (800): entropy 0.01 -> reward 17.76 with std pinned
-      # at the 1.0 cap since iteration ~400; entropy 0.002 -> reward 17.49 with std
-      # falling to 0.16. Same return, but the weaker bonus lets the policy gradient
-      # pull std down instead of the entropy term pushing it into the clip region.
+      # No effect while the policy standard deviation is fixed: the entropy of a
+      # Gaussian depends only on its standard deviation, so with learn_std=False this
+      # term contributes a constant and its gradient is identically zero. Retained so
+      # that the value is defined if std is made learnable again; 0.002 was the
+      # largest setting under which the policy gradient still pulled std down rather
+      # than the entropy bonus pushing it into the clip region.
       entropy_coef=0.002,
       num_learning_epochs=5,
       num_mini_batches=4,

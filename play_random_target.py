@@ -1,3 +1,18 @@
+"""Replay a checkpoint or a scripted agent in an interactive viewer.
+
+Each reset samples a new target block unless --target pins one. The --agent choice
+selects between the trained policy, random actions, and zero actions; the last is useful
+for inspecting reset geometry and the settling transient without a policy involved.
+
+The yaw configuration must match the one the checkpoint was trained under. Neither flag
+given runs the yaw curriculum at its start value, which is neither the frozen nor the
+full setting, so a policy trained with --freeze-yaw has to be replayed with it as well.
+The resolved yaw setting is printed at startup.
+
+Use --viewer viser on a headless machine; the native viewer requires a display. With
+--video the run is additionally recorded to an mp4 under the run's log directory.
+"""
+
 import argparse
 import os
 

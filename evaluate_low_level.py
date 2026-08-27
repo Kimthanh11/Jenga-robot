@@ -1,3 +1,19 @@
+"""Deterministic per-target evaluation of a trained checkpoint.
+
+Runs a fixed number of episodes for each target block and missing-block level and
+reports extraction rate, safe success rate, tower damage rate, mean and maximum
+progress, episode length, and the contact, stall, stop and retreat statistics that
+distinguish failure modes from one another.
+
+Aggregate reward is not sufficient to characterise this task: a policy can average well
+while failing completely on individual targets, which is why every quantity is reported
+per target rather than pooled.
+
+Contact parameters and the yaw limit can be overridden so that one checkpoint can be
+compared against itself under different environment settings. Results are written
+incrementally to CSV.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -32,10 +48,11 @@ def _set_eval_curriculum(missing_level: int) -> None:
     cfg.RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
 
 
-# Checkpoints trained before the distribution fix carry `std_param` (std_type
-# "scalar"); the fixed config uses `log_std_param` (std_type "log"), so they no longer
-# load with strict=True. Evaluation runs the deterministic policy, where std is
-# irrelevant -- this switch just restores the old parameter name for loading.
+# Parameter naming differs between distribution configurations: std_type "scalar"
+# stores `std_param`, std_type "log" stores `log_std_param`. A checkpoint therefore
+# only loads with strict=True under the configuration that produced it. Evaluation
+# uses the deterministic policy, where the standard deviation has no effect, so this
+# configuration exists solely to restore the older parameter name for loading.
 LEGACY_DISTRIBUTION_CFG = {
     "class_name": "GaussianDistribution",
     "init_std": 0.8,
@@ -209,10 +226,14 @@ def _evaluate_case(
 
 
 def _append_row(csv_path, row) -> None:
-    """Write each case as soon as it is measured.
+    """Append one result row to the CSV, creating the file and header if needed.
 
-    A full evaluation can outlive its Slurm time limit; writing only at the end meant a
-    two-hour job produced no file at all. Appending keeps every completed case.
+    Rows are written as they are produced rather than buffered until the end, so that
+    a run terminated by its scheduler time limit still yields the cases it completed.
+
+    Args:
+        csv_path: Destination path, or None to disable writing.
+        row: Mapping of column name to value; its keys define the header.
     """
     if csv_path is None:
         return
