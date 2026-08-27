@@ -3,12 +3,12 @@
 #
 # Usage from repo root:
 #   sbatch train_resume_yaw.sbatch
-#   sbatch train_resume_yaw.sbatch 2000 256
-#   sbatch train_resume_yaw.sbatch 2000 256 2026-07-23_12-34-56 model_1999.pt
+#   sbatch train_resume_yaw.sbatch 2000 1536
+#   sbatch train_resume_yaw.sbatch 2000 1536 2026-07-23_12-34-56 model_1999.pt
 #
 # Args:
 #   1: additional iterations, default 2000
-#   2: num envs, default 256
+#   2: num envs, default 1536 (nconmax=1024/njmax=512 as of 2026-08-21, was 256)
 #   3: run folder under logs/rsl_rl/jenga, optional
 #   4: checkpoint file inside that run folder, optional
 
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 ITERS="${1:-2000}"
-NUM_ENVS="${2:-256}"
+NUM_ENVS="${2:-1536}"
 LOAD_RUN="${3:-}"
 LOAD_CHECKPOINT="${4:-}"
 

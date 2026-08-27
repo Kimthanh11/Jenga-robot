@@ -1,8 +1,8 @@
 #!/bin/bash
 # Train the incomplete-tower + random-block ABORT policy (v2 base: live touch/yaw + abort action).
-#   sbatch train_incomplete_random_abort.sbatch            # defaults: 6000 iters, 256 envs
-#   sbatch train_incomplete_random_abort.sbatch 6000 256   # iters, num_envs
-# NOTE: 256 envs — that is what fits in GPU memory for this tower. Do NOT raise.
+#   sbatch train_incomplete_random_abort.sbatch            # defaults: 6000 iters, 1536 envs
+#   sbatch train_incomplete_random_abort.sbatch 6000 1536   # iters, num_envs
+# NOTE: 1536 verified stable (nconmax=1024/njmax=512, 2026-08-21 investigation); real ceiling untested above that.
 #SBATCH --job-name=jenga-incrand-abort
 #SBATCH -p stud
 #SBATCH --gres=gpu:1
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 ITERS="${1:-6000}"
-NUM_ENVS="${2:-256}"
+NUM_ENVS="${2:-1536}"
 
 # REPO_DIR is overridable so the run can live in a side clone while the shared
 # working tree stays untouched. VENV always comes from the main project.

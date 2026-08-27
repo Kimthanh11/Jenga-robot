@@ -977,8 +977,14 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             azimuth=45.0,
         ),
         sim=SimulationCfg(
-            nconmax=4096,
-            njmax=4096,
+            # Reduced from the original 4096/4096: nconmax is a GLOBAL contact pool
+            # (shared across all worlds), njmax is PER-WORLD and drives a dense
+            # constraint Jacobian (nworld, njmax, nv) -- with nv~148 for this tower,
+            # 4096 was ~28x oversized and was the actual num_envs ceiling (CUDA-graph
+            # OOM above ~800 envs on an 11GB 2080 Ti). 512/1024 verified stable up to
+            # 1536 envs with room to spare (2026-08-21 cluster investigation).
+            nconmax=1024,
+            njmax=512,
             mujoco=MujocoCfg(timestep=0.002),
         ),
         decimation=5,
