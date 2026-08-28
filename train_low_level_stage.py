@@ -74,6 +74,14 @@ def main() -> None:
         help="Override YAW_TARGET_LIMIT (rad). Beyond 0.56 rad (32.1 deg) the 80 mm "
         "hook shaft no longer fits into the 51 mm slot the target block vacates.",
     )
+    parser.add_argument(
+        "--abort",
+        action="store_true",
+        help="Train the abort variant: adds a fifth action that ends the episode when "
+        "held over a threshold, so a block that cannot be extracted safely can be "
+        "abandoned. Warm-start from a base checkpoint widened by "
+        "widen_checkpoint_for_abort.py.",
+    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -93,10 +101,18 @@ def main() -> None:
         cfg.RANDOM_TARGET_BLOCK_NAMES = tuple(
             t.strip() for t in args.targets.split(",") if t.strip()
         )
-    env_cfg = cfg.jenga_env_cfg()
+    # The abort module builds on cfg and reads its globals, so every override above
+    # still applies; only the environment and runner factories come from elsewhere.
+    task = cfg
+    if args.abort:
+        import mjlab_jenga.jenga_abort_cfg as abort_cfg
+
+        task = abort_cfg
+
+    env_cfg = task.jenga_env_cfg()
     env_cfg.scene.num_envs = args.num_envs
 
-    agent_cfg = cfg.jenga_ppo_runner_cfg()
+    agent_cfg = task.jenga_ppo_runner_cfg()
     agent_cfg.max_iterations = args.iterations
     if args.entropy_coef is not None:
         agent_cfg.algorithm.entropy_coef = args.entropy_coef
@@ -106,6 +122,8 @@ def main() -> None:
         run_name += f"_ent{args.entropy_coef:g}"
     if args.success_curriculum_steps is not None:
         run_name += f"_cur{args.success_curriculum_steps}"
+    if args.abort:
+        run_name += "_abort"
     if args.freeze_yaw:
         run_name += "_noyaw"
     if args.yaw_limit is not None:
