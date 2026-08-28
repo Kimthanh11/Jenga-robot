@@ -214,9 +214,14 @@ def jenga_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-    cfg = base.jenga_ppo_runner_cfg()
-    cfg.experiment_name = "jenga_abort"
-    return cfg
+    """The base runner configuration, unchanged.
+
+    experiment_name deliberately keeps the base value. Resuming resolves the checkpoint
+    as logs/rsl_rl/<experiment_name>/<load_run>, so renaming it would look for the
+    warm-start checkpoint in a directory that does not exist. Abort runs remain
+    distinguishable because train_low_level_stage.py appends "_abort" to the run name.
+    """
+    return base.jenga_ppo_runner_cfg()
 
 
 if __name__ == "__main__":
