@@ -69,6 +69,14 @@ def main() -> None:
         help="Enable the full yaw curriculum during play.",
     )
     parser.add_argument(
+        "--no-terminations",
+        action="store_true",
+        help="Disable success and tower_damage terminations. Because tower_damage ends "
+        "the episode the moment a block passes 25 mm, the recorded displacement can "
+        "never exceed the threshold by much; this shows what the tower actually does "
+        "afterwards.",
+    )
+    parser.add_argument(
         "--missing",
         type=int,
         default=0,
@@ -148,6 +156,7 @@ def main() -> None:
             viewer=args.viewer,
             num_envs=args.num_envs,
             device=args.device,
+            no_terminations=args.no_terminations,
             video=args.video,
             video_length=args.video_length,
             camera=args.camera,
