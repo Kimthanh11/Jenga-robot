@@ -104,6 +104,13 @@ def _evaluate_case(
     success_count = 0
     extraction_count = 0
     tower_damage_count = 0
+    tower_xy_sum = 0.0
+    tower_z_sum = 0.0
+    tower_rot_sum = 0.0
+    tower_xy_max = 0.0
+    damage_by_xy = 0
+    damage_by_z = 0
+    damage_by_rot = 0
     progress_sum = 0.0
     progress_max = 0.0
     length_sum = 0.0
@@ -148,12 +155,30 @@ def _evaluate_case(
             extraction = cfg.target_extraction_reached(env)[collect_ids].detach()
             success = cfg.success_block_extract(env)[collect_ids].detach()
             tower_damage = cfg.tower_damage_signal(env)[collect_ids].detach()
+            # Which of the three thresholds a damaged episode crossed, and by how
+            # much. tower_damage alone cannot distinguish a tower that fell over from
+            # one that merely deformed past 25 mm while remaining upright.
+            tower_xy = cfg.tower_max_block_horizontal_shift(env)[collect_ids].detach()
+            tower_z = cfg.tower_max_block_vertical_shift(env)[collect_ids].detach()
+            tower_rot = cfg.tower_max_block_rotation(env)[collect_ids].detach()
             lengths = env.episode_length_buf[collect_ids].detach()
 
             completed += int(collect_ids.numel())
             extraction_count += int(extraction.sum().item())
             success_count += int(success.sum().item())
             tower_damage_count += int(tower_damage.sum().item())
+            tower_xy_sum += float(tower_xy.sum().item())
+            tower_z_sum += float(tower_z.sum().item())
+            tower_rot_sum += float(tower_rot.sum().item())
+            tower_xy_max = max(tower_xy_max, float(tower_xy.max().item()))
+            damaged = tower_damage > 0.5
+            if bool(damaged.any().item()):
+                over_xy = damaged & (tower_xy > cfg.TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT)
+                over_z = damaged & (tower_z > cfg.TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT)
+                over_rot = damaged & (tower_rot > cfg.TOWER_DAMAGE_MAX_BLOCK_ROTATION)
+                damage_by_xy += int(over_xy.sum().item())
+                damage_by_z += int(over_z.sum().item())
+                damage_by_rot += int(over_rot.sum().item())
             progress_sum += float(progress.sum().item())
             progress_max = max(
                 progress_max,
@@ -197,6 +222,13 @@ def _evaluate_case(
             "extraction_rate": 0.0,
             "success_rate": 0.0,
             "tower_damage_rate": 0.0,
+            "tower_xy_mean": 0.0,
+            "tower_z_mean": 0.0,
+            "tower_rot_deg_mean": 0.0,
+            "tower_xy_max": 0.0,
+            "damage_by_xy": 0.0,
+            "damage_by_z": 0.0,
+            "damage_by_rot": 0.0,
             "progress_mean": 0.0,
             "progress_max": 0.0,
             "episode_length_mean": 0.0,
@@ -207,10 +239,18 @@ def _evaluate_case(
             "retreat_rate": 0.0,
         }
 
+    damaged_total = max(tower_damage_count, 1)
     return {
         "target": target,
         "missing_level": missing_level,
         "episodes": completed,
+        "tower_xy_mean": tower_xy_sum / completed,
+        "tower_z_mean": tower_z_sum / completed,
+        "tower_rot_deg_mean": (tower_rot_sum / completed) * 57.2957795,
+        "tower_xy_max": tower_xy_max,
+        "damage_by_xy": damage_by_xy / damaged_total,
+        "damage_by_z": damage_by_z / damaged_total,
+        "damage_by_rot": damage_by_rot / damaged_total,
         "extraction_rate": extraction_count / completed,
         "success_rate": success_count / completed,
         "tower_damage_rate": tower_damage_count / completed,
