@@ -156,7 +156,7 @@ def main() -> None:
     register_mjlab_task(
         task_id=task_id,
         env_cfg=env_cfg,
-        play_env_cfg=cfg.jenga_env_cfg(play=True),
+        play_env_cfg=task.jenga_env_cfg(play=True),
         rl_cfg=agent_cfg,
     )
 
