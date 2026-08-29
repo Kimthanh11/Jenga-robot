@@ -12,11 +12,32 @@ carrying over:
 * The termination is declared `time_out=True`. Aborting is an artificial cutoff, not a
   failure state, so the value function must bootstrap at that point rather than treat
   the state as worthless.
-* The abort signal must be sustained. Thresholding a single sample makes an accidental
-  crossing near-certain over a 2000-step episode, and that variant was measured firing
-  in 27% of episodes at iteration 286 -- far too early to be a learned decision.
-  Requiring ABORT_HOLD_STEPS consecutive crossings reduces the accidental rate to
-  p**ABORT_HOLD_STEPS.
+* Accidental triggering has to be controlled. Thresholding a single sample under an
+  unbounded standard deviation makes a crossing near-certain, and that variant was
+  measured firing in 27% of episodes at iteration 286.
+
+The mechanism that variant uses for the second point does not transfer, and a run under
+it produced a maximum abort rate of exactly zero over 1150 iterations. It requires the
+signal to stay over threshold for a number of consecutive steps, which reduces the
+accidental rate to p**hold. With a standard deviation of 0.2 and a threshold of 0.70,
+p is 2.3e-4, so a hold of 100 puts the event at about 1e-37: it can never occur by
+chance. But the policy gradient on this output is proportional to how the return varies
+with the sampled value, and if the abort never happens the return does not vary with it
+at all. The gradient is zero, the head stays at its initialisation, and the decision
+cannot be learned. The guard against false positives and the only route to discovery
+are the same knob.
+
+That variant needed a large hold because its standard deviation was learned and reached
+5. Ours is fixed at 0.2, which controls accidental triggering by itself, so a single
+sample suffices and the threshold alone sets the rate. At 0.80 the accidental rate is
+one abort per 1.3 iterations, or about 2% of episodes -- often enough for the value to
+be estimated, rare enough not to disturb extraction:
+
+    threshold   per step   aborts/iteration   share of episodes
+         0.98   4.8e-07               0.01               0.03%
+         0.85   1.1e-05               0.26               0.75%
+         0.80   3.2e-05               0.78               2.19%
+         0.70   2.3e-04               5.72              15.03%
 
 This module differs from that one in a way that matters for reuse. That variant also
 had to add a tower-shift observation, because its policy had nothing to ground the
@@ -61,20 +82,18 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
 
-# Threshold the abort action must exceed. Starts where Gaussian noise cannot reach it
-# and eases as the policy learns, so early training is unaffected.
-ABORT_THRESHOLD_START = 0.98
-ABORT_THRESHOLD_END = 0.70
-# common_step_counter advances by one per env.step(), i.e. 32 per iteration at the
-# configured rollout length, so 40_000 steps is about 1250 iterations.
+# Threshold the abort action must exceed. Held constant: a curriculum here is
+# ineffective anyway, because common_step_counter is restored on resume and a
+# warm-started run therefore begins at the end of the ramp.
+ABORT_THRESHOLD_START = 0.80
+ABORT_THRESHOLD_END = 0.80
 ABORT_CURRICULUM_STEPS = 40_000
 
-# Consecutive over-threshold steps required before the abort takes effect. At the
-# configured policy standard deviation of 0.2 and a mean output of 0, a single step
-# exceeds 0.98 with probability ~5e-7, so accidental triggering is impossible well
-# below this value; 100 keeps that true even if the mean drifts, at a cost of one
-# second of confirmation delay in a 20-second episode.
-ABORT_HOLD_STEPS = 100
+# Consecutive over-threshold steps required before the abort takes effect. Must be 1
+# under a fixed standard deviation: any larger value raises the accidental rate to
+# p**hold, which for p = 3e-5 is small enough that the action never occurs and hence
+# never receives gradient. See the module docstring.
+ABORT_HOLD_STEPS = 1
 
 ABORT_PENALTY_WEIGHT = -2.0
 ACTION_CLIP = 1.0
