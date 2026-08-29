@@ -69,6 +69,22 @@ def main() -> None:
         help="Enable the full yaw curriculum during play.",
     )
     parser.add_argument(
+        "--no-terminations",
+        action="store_true",
+        help="Disable success and tower_damage terminations. Because tower_damage ends "
+        "the episode the moment a block passes 25 mm, the recorded displacement can "
+        "never exceed the threshold by much; this shows what the tower actually does "
+        "afterwards.",
+    )
+    parser.add_argument(
+        "--missing",
+        type=int,
+        default=0,
+        help="Number of blocks removed before the episode starts. The default of 0 "
+        "leaves the tower intact, which is not the condition a policy trained on the "
+        "missing-block stages was evaluated under.",
+    )
+    parser.add_argument(
         "--freeze-yaw",
         action="store_true",
         help="Hold the hook at its home yaw, matching train_low_level_stage.py "
@@ -91,6 +107,12 @@ def main() -> None:
 
     cfg.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
     cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+    if args.missing > 0:
+        cfg.FORCED_MISSING_BLOCK_COUNT = args.missing
+        cfg.MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = -1
+        cfg.MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
+        cfg.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 1.0
+        cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 1.0
     cfg.RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
     cfg.RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
     cfg.RANDOM_TARGET_BLOCK_START_PROBABILITY = 1.0
@@ -106,7 +128,7 @@ def main() -> None:
         cfg.YAW_CURRICULUM_END = 0.0
     print(
         f"yaw: curriculum=({cfg.YAW_CURRICULUM_START}, {cfg.YAW_CURRICULUM_END}) "
-        f"limit={cfg.YAW_TARGET_LIMIT} rad",
+        f"limit={cfg.YAW_TARGET_LIMIT} rad | missing blocks: {args.missing}",
         flush=True,
     )
 
@@ -134,6 +156,7 @@ def main() -> None:
             viewer=args.viewer,
             num_envs=args.num_envs,
             device=args.device,
+            no_terminations=args.no_terminations,
             video=args.video,
             video_length=args.video_length,
             camera=args.camera,
