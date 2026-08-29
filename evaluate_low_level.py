@@ -24,6 +24,10 @@ from pathlib import Path
 import torch
 
 import mjlab_jenga.jenga_mjenv_cfg as cfg
+
+# Which module supplies the environment and runner. --abort swaps in the variant
+# with the extra action; cfg still holds the globals every override writes to.
+task = cfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 
@@ -74,7 +78,7 @@ def _evaluate_case(
 ) -> dict[str, float | int | str]:
     _set_eval_curriculum(missing_level)
 
-    env_cfg = cfg.jenga_env_cfg()
+    env_cfg = task.jenga_env_cfg()
     env_cfg.scene.num_envs = num_envs
     env_cfg.auto_reset = False
     env_cfg.observations["actor"].enable_corruption = False
@@ -86,7 +90,7 @@ def _evaluate_case(
     if cone is not None:
         env_cfg.sim.mujoco.cone = cone
 
-    agent_cfg = cfg.jenga_ppo_runner_cfg()
+    agent_cfg = task.jenga_ppo_runner_cfg()
     if legacy_distribution:
         agent_cfg.actor.distribution_cfg = dict(LEGACY_DISTRIBUTION_CFG)
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
@@ -317,9 +321,22 @@ def main() -> None:
         action="store_true",
         help="Hold the hook at its home yaw, as train_low_level_stage.py --freeze-yaw does.",
     )
+    parser.add_argument(
+        "--abort",
+        action="store_true",
+        help="Evaluate a checkpoint of the abort variant, which has a fifth "
+        "action. Without this the environment is built with four and the "
+        "checkpoint cannot be loaded.",
+    )
     parser.add_argument("--impratio", type=float, default=None)
     parser.add_argument("--cone", default=None)
     args = parser.parse_args()
+
+    if args.abort:
+        global task
+        import mjlab_jenga.jenga_abort_cfg as abort_cfg
+
+        task = abort_cfg
 
     # Global, read when the env spec is built, so setting them once here is enough.
     if args.yaw_limit is not None:

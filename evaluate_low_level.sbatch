@@ -25,7 +25,8 @@ NUM_ENVS="${5:-64}"
 LEGACY="${6:-}"
 IMPRATIO="${7:-}"
 CONE="${8:-}"       # pyramidal or elliptic; overrides the config default
-YAWLIMIT="${9:-}"   # YAW_TARGET_LIMIT in rad, or "freeze" for the home yaw
+YAWLIMIT="${9:-}"
+ABORT="${10:-}"   # YAW_TARGET_LIMIT in rad, or "freeze" for the home yaw
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
@@ -56,6 +57,7 @@ CMD=(./.venv/bin/python evaluate_low_level.py
 if [ -n "${LEGACY}" ];   then CMD+=(--legacy-distribution); fi
 if [ -n "${IMPRATIO}" ]; then CMD+=(--impratio "${IMPRATIO}"); fi
 if [ -n "${CONE}" ];     then CMD+=(--cone "${CONE}"); fi
+if [ -n "${ABORT}" ]; then CMD+=(--abort); fi
 if [ "${YAWLIMIT}" = "freeze" ]; then
   CMD+=(--freeze-yaw)
 elif [ -n "${YAWLIMIT}" ]; then
