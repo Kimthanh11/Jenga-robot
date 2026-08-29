@@ -208,6 +208,11 @@ def main() -> None:
         root_state[:, 7:] = 0.0
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
+    # _start_pos is written once in the command term's constructor and is not
+    # restored by env.reset(), so a game that moves the baseline leaves it moved for
+    # every game after it. Keep the original to put back at the start of each game.
+    pristine_start_pos = cmd._start_pos.clone()
+
     def rebaseline() -> None:
         """Make the current tower the reference for progress and damage."""
         current = torch.stack(
@@ -218,6 +223,10 @@ def main() -> None:
     rows: list[dict] = []
     for game in range(1, args.games + 1):
         env.reset()
+        # Restore the nominal spawn reference; the reset rebuilds the tower but not
+        # this. Without it, every game after the first measures a fresh tower against
+        # the dismantled one left by its predecessor and is damaged on the first move.
+        cmd._start_pos[:] = pristine_start_pos
         removed: list[str] = []
         failed: list[str] = []
         reason = "no_target"
