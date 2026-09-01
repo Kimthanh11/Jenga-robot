@@ -3,7 +3,9 @@
 #
 # Usage:
 #   sbatch evaluate_low_level.sbatch logs/rsl_rl/jenga/<run>/model_9999.pt
-#   sbatch evaluate_low_level.sbatch logs/rsl_rl/jenga/<run>/model_9999.pt b6_1,b7_1 0,1
+#   sbatch evaluate_low_level.sbatch logs/rsl_rl/jenga/<run>/model_9999.pt heldout-legal 0
+#
+# Named target sets: trained, trained-legal, heldout-legal, legal, tower.
 
 #SBATCH --job-name=jenga_eval
 #SBATCH -p stud
@@ -18,15 +20,17 @@
 set -euo pipefail
 
 CHECKPOINT="${1:?checkpoint path required}"
-TARGETS="${2:-all}"
+TARGETS="${2:-trained}"
 LEVELS_CSV="${3:-0,1,2,3}"
-EPISODES="${4:-64}"
-NUM_ENVS="${5:-64}"
+EPISODES_PER_SEED="${4:-50}"
+NUM_ENVS="${5:-50}"
 LEGACY="${6:-}"
 IMPRATIO="${7:-}"
 CONE="${8:-}"       # pyramidal or elliptic; overrides the config default
-YAWLIMIT="${9:-}"
-ABORT="${10:-}"   # YAW_TARGET_LIMIT in rad, or "freeze" for the home yaw
+YAWLIMIT="${9:-freeze}"  # freeze, configured, or a numeric limit in radians
+ABORT="${10:-}"
+SEEDS="${11:-1,2,3,4,5}"
+MAX_STEPS="${12:-2000}"
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
@@ -38,7 +42,8 @@ echo "cfg:     $(./.venv/bin/python -c 'import mjlab_jenga.jenga_mjenv_cfg as c;
 
 IFS=',' read -r -a LEVELS <<< "${LEVELS_CSV}"
 echo "yawlimit: ${YAWLIMIT:-default}"
-OUT="logs/eval/eval-${SLURM_JOB_ID}.csv"
+EPISODES_OUT="logs/eval/eval-${SLURM_JOB_ID}-episodes.csv"
+SUMMARY_OUT="logs/eval/eval-${SLURM_JOB_ID}-summary.csv"
 
 export WANDB_MODE=disabled
 export WANDB_DISABLED=true
@@ -51,17 +56,22 @@ CMD=(./.venv/bin/python evaluate_low_level.py
   --checkpoint "${CHECKPOINT}"
   --targets "${TARGETS}"
   --missing-levels "${LEVELS[@]}"
-  --episodes "${EPISODES}"
+  --episodes-per-seed "${EPISODES_PER_SEED}"
   --num-envs "${NUM_ENVS}"
-  --csv "${OUT}")
+  --seeds "${SEEDS}"
+  --max-steps "${MAX_STEPS}"
+  --episodes-csv "${EPISODES_OUT}"
+  --summary-csv "${SUMMARY_OUT}")
 if [ -n "${LEGACY}" ];   then CMD+=(--legacy-distribution); fi
 if [ -n "${IMPRATIO}" ]; then CMD+=(--impratio "${IMPRATIO}"); fi
 if [ -n "${CONE}" ];     then CMD+=(--cone "${CONE}"); fi
 if [ -n "${ABORT}" ]; then CMD+=(--abort); fi
 if [ "${YAWLIMIT}" = "freeze" ]; then
   CMD+=(--freeze-yaw)
+elif [ "${YAWLIMIT}" = "configured" ]; then
+  CMD+=(--enable-yaw)
 elif [ -n "${YAWLIMIT}" ]; then
-  CMD+=(--yaw-limit "${YAWLIMIT}")
+  CMD+=(--enable-yaw --yaw-limit "${YAWLIMIT}")
 fi
 
 printf 'cmd:     %s\n' "${CMD[*]}"

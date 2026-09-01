@@ -1,12 +1,12 @@
 #!/bin/bash
 # Scripted extraction feasibility sweep across targets, contact points, friction, seeds.
 #
-# Answers: which target blocks can a known-good open-loop controller actually extract?
-# Blocks it cannot extract must not be RL training targets.
+# Measures which targets this scripted controller can extract. Failure does not prove
+# that no feedback controller or learned policy can extract the block.
 #
 # Usage:
 #   sbatch feasibility_sweep.sbatch
-#   sbatch feasibility_sweep.sbatch all "-0.5,0.0,0.5" "0.20,0.38" "1,2,3"
+#   sbatch feasibility_sweep.sbatch legal "-0.5,0.0,0.5" "0.20,0.38" "1,2,3"
 
 #SBATCH --job-name=jenga_feas
 #SBATCH -p stud
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-TARGETS="${1:-all}"
+TARGETS="${1:-trained}"
 CONTACT_Z="${2:-0.0}"
 FRICTIONS="${3:-}"
 SEEDS="${4:-42}"

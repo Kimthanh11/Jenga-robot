@@ -1,9 +1,9 @@
 """Vectorized feasibility sweep over candidate target blocks.
 
-Determines which blocks a scripted full push can extract and at what actuator force,
-across contact points, friction values and seeds. The result defines the target set
-admitted to reinforcement learning: a block the open-loop controller cannot extract is
-not a viable training target.
+Measures which blocks this particular scripted full-push controller can extract and at
+what actuator force, across contact points, friction values and seeds. Failure is
+evidence about this controller and parameter range, not proof that a target is
+physically impossible or unsuitable for reinforcement learning.
 
 Layout: one environment per (target, contact point). Friction and seed are swept as
 repeated passes over the same environments rather than as additional environments,
@@ -52,7 +52,7 @@ def _append_row(csv_path, row) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Scripted extraction feasibility sweep.")
-    parser.add_argument("--targets", default="all")
+    parser.add_argument("--targets", default="trained")
     parser.add_argument(
         "--contact-z",
         default="0.0",
@@ -109,12 +109,13 @@ def main() -> None:
     from mjlab.envs import ManagerBasedRlEnv
 
     import mjlab_jenga.jenga_mjenv_cfg as cfg
+    from mjlab_jenga.evaluation_utils import resolve_targets
 
-    targets = (
-        list(cfg.RANDOM_TARGET_BLOCK_NAMES)
-        if args.targets == "all"
-        else [t.strip() for t in args.targets.split(",") if t.strip()]
-    )
+    try:
+        _, resolved_targets = resolve_targets(args.targets, cfg)
+    except ValueError as exc:
+        parser.error(str(exc))
+    targets = list(resolved_targets)
     contact_points = [
         (cx, cz)
         for cz in _parse_floats(args.contact_z)
