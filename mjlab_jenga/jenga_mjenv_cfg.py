@@ -145,6 +145,10 @@ MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.35
 MISSING_BLOCK_DOUBLE_BEGIN_STEP = 250_000
 MISSING_BLOCK_TRIPLE_BEGIN_STEP = 500_000
 FORCED_MISSING_BLOCK_COUNT: int | None = None
+# Evaluation can provide an exact, target-valid set of patterns. They are assigned in
+# a deterministic cycle over the vectorized environments; training leaves this unset.
+FORCED_MISSING_PATTERN_IDS: tuple[int, ...] | None = None
+FORCED_MISSING_PATTERN_OFFSET = 0
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
 MISSING_BLOCK_PARK_SPACING = 0.2
 RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
@@ -189,9 +193,9 @@ RANDOM_TARGET_BLOCK_NAMES = (
 # neighbouring block still travels 26 mm over a full 112.5 mm extraction against a
 # 12 mm allowance.
 #
-# The exclusion is thus a consequence of the task specification rather than of
-# insufficient tuning. Under a 12 mm stability allowance these five blocks cannot be
-# extracted by any controller. Revisit if the stability criterion changes.
+# The calibrated scripted controller cannot extract these blocks under the 12 mm
+# stability allowance. This is an empirical exclusion for the present actuator and
+# controller family, not a proof that no controller could extract them.
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
 HOOK_APPROACH_GAP = 0.02
@@ -944,6 +948,20 @@ def missing_block_max_count(env: ManagerBasedRlEnv) -> int:
 
 
 def _active_missing_pattern_ids(env: ManagerBasedRlEnv) -> torch.Tensor:
+    if FORCED_MISSING_PATTERN_IDS is not None:
+        invalid = [
+            idx
+            for idx in FORCED_MISSING_PATTERN_IDS
+            if idx < 0 or idx >= len(MISSING_BLOCK_PATTERNS)
+        ]
+        if invalid:
+            raise ValueError(f"Invalid forced missing pattern ids: {invalid}")
+        return torch.tensor(
+            FORCED_MISSING_PATTERN_IDS,
+            dtype=torch.long,
+            device=env.device,
+        )
+
     max_count = missing_block_max_count(env)
     if FORCED_MISSING_BLOCK_COUNT is None:
         active_ids = [
@@ -1020,7 +1038,15 @@ def randomize_missing_blocks(
     missing_probability = missing_block_randomization_scale(env)
     active_pattern_ids = _active_missing_pattern_ids(env)
 
-    if active_pattern_ids.numel() > 0 and missing_probability.item() > 0.0:
+    if FORCED_MISSING_PATTERN_IDS is not None:
+        if active_pattern_ids.numel() == 0:
+            raise ValueError("FORCED_MISSING_PATTERN_IDS must not be empty")
+        choice = torch.remainder(
+            env_ids + FORCED_MISSING_PATTERN_OFFSET,
+            active_pattern_ids.numel(),
+        )
+        pattern_ids = active_pattern_ids[choice]
+    elif active_pattern_ids.numel() > 0 and missing_probability.item() > 0.0:
         use_missing_pattern = torch.rand(num_resets, device=env.device) < missing_probability
         num_missing_patterns = int(use_missing_pattern.sum().item())
         if num_missing_patterns > 0:
@@ -2695,6 +2721,8 @@ def apply_low_level_stage(stage: str) -> None:
     global RANDOM_TARGET_WITH_MISSING_START_PROBABILITY
     global RANDOM_TARGET_WITH_MISSING_END_PROBABILITY
     global FORCED_MISSING_BLOCK_COUNT
+    global FORCED_MISSING_PATTERN_IDS
+    global FORCED_MISSING_PATTERN_OFFSET
 
     MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = 0
     MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 600_000
@@ -2711,6 +2739,8 @@ def apply_low_level_stage(stage: str) -> None:
     RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
     RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
     FORCED_MISSING_BLOCK_COUNT = None
+    FORCED_MISSING_PATTERN_IDS = None
+    FORCED_MISSING_PATTERN_OFFSET = 0
 
     if stage == "fixed":
         MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
