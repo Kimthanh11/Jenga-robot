@@ -68,14 +68,15 @@ export WANDB_MODE=disabled
 export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
-PYTHONUNBUFFERED=1 "${VENV_PY}" train.py Mjlab-Jenga-IncompleteRandomAbort \
-  --agent.logger tensorboard \
-  --agent.experiment-name "${EXP_NAME}" \
-  --agent.resume True \
-  --agent.load-run "${LOAD_RUN}" \
-  --agent.load-checkpoint "${LOAD_CHECKPOINT}" \
-  --agent.max-iterations "${ITERS}" \
-  --env.scene.num-envs "${NUM_ENVS}"
+# --iterations is the run's TOTAL target (same as a fresh launch), not "iterations
+# remaining" -- train_incomplete_random_staged.py sizes every curriculum's absolute
+# step count off it, so passing the same total here keeps the curriculum schedule
+# consistent across the resume instead of quietly redefining it.
+PYTHONUNBUFFERED=1 "${VENV_PY}" train_incomplete_random_staged.py abort \
+  --iterations "${ITERS}" \
+  --num-envs "${NUM_ENVS}" \
+  --load-run "${LOAD_RUN}" \
+  --load-checkpoint "${LOAD_CHECKPOINT}"
 
 RUN_DIR="$(ls -dt "logs/rsl_rl/${EXP_NAME}"/*/ | head -1)"
 LAST_MODEL="$(ls -t "${RUN_DIR}"model_*.pt | head -1)"
