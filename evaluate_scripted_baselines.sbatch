@@ -4,6 +4,7 @@
 # Usage:
 #   sbatch evaluate_scripted_baselines.sbatch heldout-legal 0
 #   sbatch evaluate_scripted_baselines.sbatch trained-legal 0,1,2,3 straight,pulsed,tap
+#   sbatch --array=0-19%2 evaluate_scripted_baselines.sbatch heldout-legal 0 protocol-array
 
 #SBATCH --job-name=jenga_base
 #SBATCH -p stud
@@ -30,18 +31,44 @@ RETREAT_STEPS="${10:-5}"
 CONTACT_X="${11:-0.0}"
 CONTACT_Z="${12:-0.0}"
 
+# The report protocol has four controllers and five seeds.  Running all twenty
+# combinations serially exceeds the cluster time limit, especially on held-out
+# targets.  Array index 0..19 selects one controller/seed pair while retaining the
+# named target set in every CSV.
+if [ "${CONTROLLERS}" = "protocol-array" ]; then
+  if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
+    echo "protocol-array requires: sbatch --array=0-19%N ..." >&2
+    exit 2
+  fi
+  if [ "${SLURM_ARRAY_TASK_ID}" -lt 0 ] || [ "${SLURM_ARRAY_TASK_ID}" -ge 20 ]; then
+    echo "protocol-array task index must be in 0..19" >&2
+    exit 2
+  fi
+  PROTOCOL_CONTROLLERS=(settle straight pulsed tap)
+  PROTOCOL_SEEDS=(1 2 3 4 5)
+  CONTROLLER_INDEX=$((SLURM_ARRAY_TASK_ID / 5))
+  SEED_INDEX=$((SLURM_ARRAY_TASK_ID % 5))
+  CONTROLLERS="${PROTOCOL_CONTROLLERS[$CONTROLLER_INDEX]}"
+  SEEDS="${PROTOCOL_SEEDS[$SEED_INDEX]}"
+fi
+
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
 IFS=',' read -r -a LEVELS <<< "${LEVELS_CSV}"
 
-EPISODES_OUT="logs/eval/baseline-${SLURM_JOB_ID}-episodes.csv"
-SUMMARY_OUT="logs/eval/baseline-${SLURM_JOB_ID}-summary.csv"
+RESULT_ID="${SLURM_JOB_ID:-local}"
+if [ -n "${SLURM_ARRAY_JOB_ID:-}" ]; then
+  RESULT_ID="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+fi
+EPISODES_OUT="logs/eval/baseline-${RESULT_ID}-episodes.csv"
+SUMMARY_OUT="logs/eval/baseline-${RESULT_ID}-summary.csv"
 
 echo "commit:      $(git rev-parse HEAD)"
 echo "targets:     ${TARGETS}"
 echo "controllers: ${CONTROLLERS}"
 echo "levels:      ${LEVELS_CSV}"
 echo "seeds:       ${SEEDS}"
+echo "result id:   ${RESULT_ID}"
 echo "cycle:       push=${PUSH_STEPS} pause=${PAUSE_STEPS} retreat=${RETREAT_STEPS}"
 echo "contact:     x=${CONTACT_X} z=${CONTACT_Z}"
 

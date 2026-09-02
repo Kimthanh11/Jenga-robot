@@ -182,7 +182,10 @@ def _run_policy_batch(
     retreat_steps = torch.zeros(env.num_envs, device=env.device)
     rows: list[dict] = []
 
-    with torch.inference_mode():
+    # mjlab mutates simulator and manager tensors during step/reset.  Inference mode
+    # marks newly created tensors as immutable outside its scope, which breaks a later
+    # manager reset.  no_grad disables autograd without imposing that restriction.
+    with torch.no_grad():
         for _ in range(max_steps):
             live = active & ~finished
             if not bool(live.any().item()):

@@ -62,6 +62,20 @@ block-local contact x/z. Keep x/z at zero for the pre-registered centre-contact
 comparison. Different duty cycles should be separate jobs, for example `20 20 5` and
 `10 30 5`; choosing the best one on the reported test seeds would bias the comparison.
 
+The complete four-controller, five-seed protocol is too long for one cluster job.
+Run each controller/seed combination as a bounded array task instead:
+
+```bash
+B_TRAIN=$(sbatch --array=0-19%2 evaluate_scripted_baselines.sbatch \
+  trained-legal 0 protocol-array | awk '{print $4}')
+B_HELD=$(sbatch --array=0-19%2 evaluate_scripted_baselines.sbatch \
+  heldout-legal 0 protocol-array | awk '{print $4}')
+```
+
+Each array element writes a distinct file named
+`baseline-<array-job>_<task>-episodes.csv`. Do not combine CSVs left by timed-out
+monolithic jobs with these complete runs because they contain duplicate scenarios.
+
 ## Analysis
 
 Combine episode CSVs from matching policy and baseline jobs:
@@ -70,8 +84,8 @@ Combine episode CSVs from matching policy and baseline jobs:
 ./.venv/bin/python analyze_evaluation.py \
   logs/eval/eval-<policy-trained-job>-episodes.csv \
   logs/eval/eval-<policy-heldout-job>-episodes.csv \
-  logs/eval/baseline-<trained-job>-episodes.csv \
-  logs/eval/baseline-<heldout-job>-episodes.csv
+  logs/eval/baseline-<trained-array-job>_*-episodes.csv \
+  logs/eval/baseline-<heldout-array-job>_*-episodes.csv
 ```
 
 The script reports micro and per-target rates with Wilson confidence intervals, the
