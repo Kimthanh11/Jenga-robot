@@ -1,32 +1,13 @@
+"""Random-target task for a tower with a fixed set of missing blocks."""
+
 from __future__ import annotations
 
-# =====================================================================================
-# INCOMPLETE TOWER + RANDOM BLOCK ASSIGNMENT (merge of jenga_incomplete.py and
-# jenga_random_block_cfg.py).
-#
-# From Thanh's jenga_incomplete.py: REMOVED_BLOCKS are physically absent from the
-# scene (rng draws are kept for all 27 blocks so the remaining blocks get exactly the
-# same per-block noise/friction as in the complete tower), and the critic observation
-# keeps the fixed 27x3 layout with zeros for missing blocks, so the layout does not
-# change when REMOVED_BLOCKS changes.
-#
-# From jenga_random_block_cfg.py: JengaPushCommand picks a random selectable block
-# per env at reset and teleports the hook in front of it; obs/rewards live in the
-# block's task frame (+X_task == extraction direction).
-#
-# New here: same-layer neighbour references are ragged in an incomplete tower (a layer
-# can lose 1 or 2 blocks), so the neighbour index is padded with a mask; blocks with
-# zero neighbours fall back to a world-fixed reference (ref = 0, start_rel = start
-# position, i.e. no drift correction).
-# =====================================================================================
-
+import math
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import mujoco
 import torch
-import math
 
 from mjlab.utils.lab_api.math import quat_apply_inverse, sample_uniform
 from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
@@ -69,12 +50,10 @@ from mjlab.viewer import ViewerConfig
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
-# Tower Configurations
+# Tower configuration
 LAYERS = 9
 BLOCKS_PER_LAYER = 3
 
-# Blocks physically removed from the tower (same set Thanh's converged incomplete-tower
-# policy was trained with).
 REMOVED_BLOCKS = {
     "b4_1",
     "b4_3",
@@ -93,8 +72,6 @@ COLOR_B = (0.96, 0.96, 0.95, 1.0)
 
 
 
-# get the Scene configurations
-_JENGA_XML = Path(__file__).parent.parent / "jenga.xml"
 _HOOK1_CFG = SceneEntityCfg("hook", joint_names=("hook_slide",))
 _HOOK_Y_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_y",))
 _HOOK_Z_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_z",))
@@ -107,10 +84,6 @@ _HOOK_ALL_CFG = SceneEntityCfg(
     joint_names=("hook_yaw", "hook_slide", "hook_slide_y", "hook_slide_z"),
 )
 _HOOK_TIP_CFG = SceneEntityCfg("hook", site_names=("hook_tip",))
-
-
-
-#block entities
 def _vec(values) -> str:
     return " ".join(f"{v:g}" for v in values)
 
@@ -172,24 +145,12 @@ def _get_block_infos():
     ]
 
 
-# loads the jenga_xml into an Mjspec, which is editable
 def _spec_from_xml(xml: str) -> mujoco.MjSpec:
     return mujoco.MjSpec.from_string(xml)
 
 
 def _get_hook_spec() -> mujoco.MjSpec:
-    # IMPORTANT: hook_yaw is the FIRST joint in the chain (closest to the parent).
-    # In MuJoCo, joints of one body compose from parent outward, so a hinge before
-    # the slides rotates the slide axes too (verified empirically). With yaw=0 the
-    # hook pushes world -X (even blocks); with yaw=90deg hook_slide pushes world -Y
-    # (odd blocks). So hook_slide is ALWAYS the "push along the block's extraction
-    # axis" actuator, in the yawed frame -> the task looks identical for every block.
-    #
-    # Ranges are widened so the reset (JengaPushCommand) can teleport the hook in
-    # front of ANY selectable block. Position actuators' ctrlrange must cover those
-    # reset targets, otherwise MuJoCo clamps the servo target and the hook snaps back.
-    # yaw ctrlrange is in radians (approx -63deg..155deg) covering home 0deg+-60deg
-    # and home 90deg+-60deg.
+    # Placing yaw before the slides rotates the complete task frame.
     xml = """
 <mujoco model="hook">
   <compiler angle="degree" coordinate="local"/>
@@ -229,7 +190,6 @@ def _get_hook_spec() -> mujoco.MjSpec:
     return _spec_from_xml(xml)
 
 
-# tells mjlab those actuators are there. We DONT create a new object, unlike EntityCfg
 _HOOK_ARTICULATION = EntityArticulationInfoCfg(
     actuators=(
         XmlActuatorCfg(target_names_expr=("hook_slide",)),
@@ -239,7 +199,6 @@ _HOOK_ARTICULATION = EntityArticulationInfoCfg(
     ),
 )
 
-# blueprint for the Jenga-Entity (where is the model from and what are the actuators)
 def _get_hook_cfg() -> EntityCfg:
     return EntityCfg(
         spec_fn=_get_hook_spec,
@@ -320,12 +279,7 @@ _ACTIVE_BLOCK_CFGS = {
 
 
 def all_block_pos(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """
-    Critic observation: fixed 27 x 3 layout regardless of REMOVED_BLOCKS.
-
-    Existing blocks contribute their current world positions; missing blocks are
-    zeros, so the critic input dimension is stable across incompleteness patterns.
-    """
+    """Return fixed-slot block positions, using zeros for missing blocks."""
     positions = []
 
     for name in _ALL_BLOCK_NAMES:
@@ -343,10 +297,6 @@ def all_block_pos(env: ManagerBasedRlEnv) -> torch.Tensor:
     return torch.cat(positions, dim=-1)
 
 
-# Observations
-
-
-#custom reward functions for the position/velocity of the target block position
 def target_block_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     asset: Entity = env.scene[asset_cfg.name]
     position = asset.data.body_link_pos_w[:, asset_cfg.body_ids, :]
@@ -362,18 +312,12 @@ def tower_com_shift(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
 ) -> torch.Tensor:
-    """
-    Horizontal shift of the tower CoM, EXCLUDING the per-env selected block (its
-    extraction is horizontal and must not count as tower perturbation).
-    """
+    """Return tower CoM shift without counting the selected block."""
     return _push_cmd(env).selected_tower_shift()
 
 
-#convert gripper to local coordinate frame of the block
 def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    """
-    extracts quaternion and position of block
-    """
+    """Return target position and orientation."""
     asset: Entity = env.scene[asset_cfg.name]
     pose = asset.data.body_link_pose_w[:, asset_cfg.body_ids, :]
     pose = pose.squeeze(1)
@@ -383,9 +327,7 @@ def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TAR
 
 
 def hook_tip_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _HOOK_TIP_CFG) -> torch.Tensor:
-    """
-    get the position of the gripper
-    """
+    """Return the hook-tip position."""
     asset: Entity = env.scene[asset_cfg.name]
     hook_tip_position = asset.data.site_pos_w[:, asset_cfg.site_ids, :]
     return hook_tip_position.squeeze(1)
@@ -396,10 +338,7 @@ PERTURBATION_CURRICULUM_STEPS = 100_000
 SUCCESS_CURRICULUM_START = 0.35
 SUCCESS_CURRICULUM_END = 0.75
 SUCCESS_CURRICULUM_STEPS = 100_000
-# Rewards
-#
-# NOTE: all target-block quantities read the PER-ENV randomly-selected block from the
-# JengaPushCommand term and project on that block's own extraction axis.
+# Rewards use each environment's selected block and extraction axis.
 def target_block_relative_movement(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
@@ -412,8 +351,6 @@ def target_block_relative_movement(
 def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     cmd = _push_cmd(env)
     movement_rel = target_block_relative_movement(env, asset_cfg)
-    # Extraction axis is the selected block's own (world -X for even layers,
-    # world -Y for odd). Progress > 0 means the block is being pushed out.
     progress = torch.sum(movement_rel * cmd.selected_extraction_w(), dim=-1)
     return progress
 
@@ -552,28 +489,13 @@ def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
-    # (Not wired into terminations by default.) Tower considered damaged if the CoM
-    # of the non-target blocks shifts too far horizontally.
     return _push_cmd(env).selected_tower_shift() > 0.06
 
 
 
 
 
-# =====================================================================================
-# Random block selection: JengaPushCommand (incomplete-tower aware)
-# =====================================================================================
-#
-# Each episode the env randomly picks a target block among SELECTABLE ones, teleports
-# the hook in front of it (yaw home 0deg for even / 90deg for odd layers), and the
-# policy learns to push THAT block out. Everything downstream reads the selection from
-# this command term.
-
-# Selectable blocks. "all" would allow every present block, but auto_search.py
-# (block_logs.txt) showed that center blocks pinned under load are STUCK/UNSAFE in the
-# complete tower, and in THIS incomplete tower layers 4 and 5 are already down to
-# 1-2 blocks — extracting from them collapses the tower. So the default is the SAFE
-# extractable set from auto_search minus removed blocks and minus layers 4/5.
+# Targets retained by the original incomplete-tower experiment.
 _SELECT_MODE: str | tuple[str, ...] = (
     "b1_1", "b1_3",
     "b2_1", "b2_2", "b2_3",
@@ -605,7 +527,6 @@ def _block_table():
         even = (layer % 2 == 0)
         tip_off = -_TIP_LOCAL_X  # 0.056, distance from body origin to tip along push
         if even:
-            # yaw home 0: slides act along world axes. Approach from +X, push -X.
             yaw = 0.0
             extraction_w = (-1.0, 0.0, 0.0)
             sx = cx + _LONG_HALF + _APPROACH_GAP + tip_off - _HOOK_BASE_POS[0]
@@ -613,8 +534,6 @@ def _block_table():
             sz = cz - _HOOK_BASE_POS[2]
             task_quat = _rz_quat(math.pi)          # world +X -> extraction (-X)
         else:
-            # yaw home 90deg: in the yawed frame hook_slide pushes world -Y.
-            # body_origin = (base_x - sy, base_y + sx, base_z + sz). Approach +Y, push -Y.
             yaw = math.pi / 2
             extraction_w = (0.0, -1.0, 0.0)
             sx = cy + _LONG_HALF + _APPROACH_GAP + tip_off - _HOOK_BASE_POS[1]
@@ -628,8 +547,7 @@ def _block_table():
             "task_quat": task_quat,
             "hook_target": (yaw, sx, sy, sz),      # order: yaw, slide, slide_y, slide_z
         })
-    # neighbours = other PRESENT blocks in the same layer (drift reference). In an
-    # incomplete tower this list is ragged: 2, 1 or 0 entries per block.
+    # Same-layer neighbours form the target's drift reference.
     by_layer: dict[int, list[int]] = {}
     for i, e in enumerate(entries):
         by_layer.setdefault(e["layer"], []).append(i)
@@ -678,8 +596,7 @@ class JengaPushCommand(CommandTerm):
         self._hook_target = torch.tensor([e["hook_target"] for e in entries],
                                          dtype=torch.float32, device=dev)        # [P,4]
 
-        # Ragged same-layer neighbour lists, padded to 2 with a validity mask.
-        # Padded slots index 0 (any valid row) and are masked out of the mean.
+        # Pad ragged same-layer neighbour lists to two entries.
         self._neighbor_idx = torch.tensor(
             [(e["neighbors"] + [0, 0])[:2] for e in entries],
             dtype=torch.long, device=dev)                                        # [P,2]
@@ -734,7 +651,7 @@ class JengaPushCommand(CommandTerm):
     def command(self) -> torch.Tensor:
         return self.selected_extraction_w()
 
-    # cached accessors (valid after each _update_metrics, which runs before rewards)
+    # Cached by _update_metrics before reward evaluation.
     def selected_target_pos_w(self) -> torch.Tensor: return self._cur_target_pos
     def selected_target_vel_w(self) -> torch.Tensor: return self._cur_target_vel
     def selected_ref_pos_w(self) -> torch.Tensor: return self._cur_ref_pos
@@ -790,8 +707,7 @@ def _push_cmd(env: ManagerBasedRlEnv) -> JengaPushCommand:
     return env.command_manager.get_term("push")
 
 
-# ---- Block-relative (task-frame) observations ----
-# Task frame: +X_task == extraction direction, so every block looks identical.
+# Block-relative observations use +X as the extraction direction.
 
 def tip_in_task_frame(env: ManagerBasedRlEnv,
                       asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
@@ -802,7 +718,6 @@ def tip_in_task_frame(env: ManagerBasedRlEnv,
 
 def block_offset_in_task_frame(env: ManagerBasedRlEnv,
                                asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    # block displacement from its start (drift-corrected), in the task frame.
     cmd = _push_cmd(env)
     movement_rel = target_block_relative_movement(env)
     return quat_apply_inverse(cmd.selected_task_quat_w(), movement_rel)
@@ -814,13 +729,7 @@ def block_vel_in_task_frame(env: ManagerBasedRlEnv,
     return quat_apply_inverse(cmd.selected_task_quat_w(), cmd.selected_target_vel_w())
 
 
-# Environment conifg
-
-
 def _make_env_cfg() -> ManagerBasedRlEnvCfg:
-#observations actor + critic
-    # Actor observations are all in the block's TASK FRAME (extraction == +X_task), so
-    # the push task looks identical regardless of which block was chosen / where it is.
     actor_terms = {
         "pusher_pos": ObservationTermCfg(
             func=joint_pos_rel,
@@ -880,14 +789,12 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
     }
 
 
-    # No hook-reset events: JengaPushCommand._resample_command owns the hook reset
-    # (it teleports the hook in front of the randomly-chosen block). It runs after the
-    # scene reset-to-default, so it wins.
+    # Target resampling also places the hook after the scene reset.
     events: dict[str, EventTermCfg] = {}
 
     commands = {
         "push": JengaPushCommandCfg(
-            # >> episode length so the block/hook is chosen only at reset, never mid-episode.
+            # Resample only at episode boundaries.
             resampling_time_range=(1.0e9, 1.0e9),
             selectable_global_idx=_SELECTABLE_GLOBAL,
         ),
@@ -951,7 +858,6 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
 
     terminations = {
         "success": TerminationTermCfg(func=success_block_extract),
-        #"tower_damage": TerminationTermCfg(func=tower_damage),
         "time_out": TerminationTermCfg(func=time_out, time_out=True),
     }
 

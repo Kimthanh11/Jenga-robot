@@ -1,14 +1,14 @@
 import argparse
 import logging
+from pathlib import Path
 import sys
 
 import mujoco
 import mujoco.viewer
 
-from tower_state import TowerState
+from scripts.legacy.tower_state import TowerState
 
 
-# --- logging: stdout by default, optional file via --log-file -----------------
 parser = argparse.ArgumentParser(description="PD-controlled Jenga pusher")
 parser.add_argument(
     "--log-file",
@@ -26,7 +26,9 @@ logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[handler]
 log = logging.getLogger("jenga")
 
 
-model = mujoco.MjModel.from_xml_path("jenga.xml")
+model = mujoco.MjModel.from_xml_path(
+    str(Path(__file__).resolve().parents[2] / "assets" / "jenga.xml")
+)
 data = mujoco.MjData(model)
 
 

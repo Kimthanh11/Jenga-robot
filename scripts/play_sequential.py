@@ -1,34 +1,4 @@
-"""Play a sequence of extractions on one tower, to see how far the skill composes.
-
-Standalone experiment. Imports jenga_mjenv_cfg and drives it from outside; nothing in
-the training or evaluation path is touched, and deleting this file changes nothing.
-
-Every measurement so far evaluates a single extraction from a tower that is reset
-beforehand, with at most three blocks pre-removed from a fixed set of patterns. A game
-is different: the tower state after five moves follows from the moves themselves, and
-is almost never one of those patterns. This script asks the question that per-target
-success rates cannot answer -- how many blocks come out in a row before the tower
-falls.
-
-Procedure per game: reset once, then repeatedly pick the most promising remaining
-target, run the policy until the attempt terminates, and on success remove the block
-from the tower and continue. A game ends when the tower is damaged, when every
-remaining target has been tried without success, or at the extraction cap.
-
-Two modelling choices worth stating, both switchable:
-
-* Damage baseline. tower_damage compares against `_start_pos`, the nominal spawn pose,
-  and its 25 mm threshold was calibrated for one extraction. Across ten moves the tower
-  drifts past that under any policy, so by default the baseline is re-established after
-  each successful extraction and every attempt is judged on its own. --cumulative keeps
-  the original baseline instead, which is stricter and arguably closer to a real game.
-* Target order. Fixed, from the measured per-target difficulty rather than learned:
-  the top layer first, the loaded centre block of layer 2 last. Block selection is not
-  part of this project, so a defensible heuristic stands in for it.
-
-One environment per game, because `_start_pos` is shared across environments and a
-per-game baseline would otherwise leak between them.
-"""
+"""Apply a checkpoint to several extractions on the same tower."""
 
 from __future__ import annotations
 
@@ -37,9 +7,7 @@ import csv
 import os
 from pathlib import Path
 
-# Measured single-extraction difficulty, easiest first: the top layer carries no load,
-# then the outer blocks of the lower layers, and b2_2 last -- confined on both sides
-# with seven layers above it, and the only target that ever damages the tower.
+# Measured single-extraction difficulty, easiest first.
 DEFAULT_ORDER = ("b9_1", "b9_3", "b9_2", "b2_1", "b2_3", "b3_1", "b2_2")
 
 
@@ -119,23 +87,10 @@ def main() -> None:
     cfg.apply_low_level_stage("target")
     cfg.YAW_CURRICULUM_START = 0.0
     cfg.YAW_CURRICULUM_END = 0.0
-    # Resets must leave the tower intact; this script removes blocks itself.
+    # This script removes blocks after each successful extraction.
     cfg.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
     cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
-    # Any block has to be markable as removed, not only the eight that appear in the
-    # hand-written patterns. Marking matters beyond bookkeeping: the damage criterion
-    # masks by presence, so a parked block that is not marked absent registers as a
-    # 1.5 m displacement and ends the game immediately.
-    #
-    # Set before the environment is built -- the mask is sized from this and the park
-    # offsets are indexed by position in it.
-    #
-    # One block stays out. TargetBlockCommand builds its selectable set by excluding
-    # everything listed here and refuses to start if nothing is left, on the reasonable
-    # assumption that a block cannot be both a training target and removable. This
-    # script never samples a target, it forces every one, so the selectable set is only
-    # needed to get past that check. b1_2 is a layer-1 centre block: never a target,
-    # and never removed here.
+    # Keep one non-target block selectable while making all others removable.
     placeholder = "b1_2"
     cfg.MISSING_BLOCK_CANDIDATES = tuple(
         name
@@ -147,21 +102,14 @@ def main() -> None:
         raise SystemExit(f"{placeholder} is reserved as the selectable placeholder")
 
     env_cfg = task.jenga_env_cfg()
-    # selectable_target_names is a dataclass field default, bound to
-    # RANDOM_TARGET_BLOCK_NAMES when the module is imported, so it has to be set on the
-    # instance rather than through the module global.
+    # The dataclass default was bound at import time; override the instance.
     env_cfg.commands["target_block"].selectable_target_names = (placeholder,)
     env_cfg.scene.num_envs = 1
     env_cfg.auto_reset = False
     env_cfg.observations["actor"].enable_corruption = False
-    # Attempts are bounded by --attempt-steps, not by the episode length, which would
-    # otherwise fire a time_out termination in the middle of a game.
+    # Attempts use their own step budget instead of the environment timeout.
     env_cfg.episode_length_s = 1.0e10
-    # The success and damage terminations are removed and evaluated here instead. With
-    # auto_reset off, a fired termination makes the environment demand a reset before
-    # the next step, and that reset would rebuild the tower -- the one thing a game
-    # must not do between moves. The same two functions are called directly below, so
-    # nothing is lost but the environment's own reaction to them.
+    # Evaluate these manually to avoid rebuilding the tower between attempts.
     env_cfg.terminations.pop("success", None)
     env_cfg.terminations.pop("tower_damage", None)
 
@@ -208,9 +156,7 @@ def main() -> None:
         root_state[:, 7:] = 0.0
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
-    # _start_pos is written once in the command term's constructor and is not
-    # restored by env.reset(), so a game that moves the baseline leaves it moved for
-    # every game after it. Keep the original to put back at the start of each game.
+    # env.reset() does not restore the command term's reference position.
     pristine_start_pos = cmd._start_pos.clone()
 
     def rebaseline() -> None:
@@ -223,9 +169,7 @@ def main() -> None:
     rows: list[dict] = []
     for game in range(1, args.games + 1):
         env.reset()
-        # Restore the nominal spawn reference; the reset rebuilds the tower but not
-        # this. Without it, every game after the first measures a fresh tower against
-        # the dismantled one left by its predecessor and is damaged on the first move.
+        # Restore the nominal reference before starting a new game.
         cmd._start_pos[:] = pristine_start_pos
         removed: list[str] = []
         failed: list[str] = []

@@ -1,17 +1,4 @@
-"""Replay a checkpoint or a scripted agent in an interactive viewer.
-
-Each reset samples a new target block unless --target pins one. The --agent choice
-selects between the trained policy, random actions, and zero actions; the last is useful
-for inspecting reset geometry and the settling transient without a policy involved.
-
-The yaw configuration must match the one the checkpoint was trained under. Neither flag
-given runs the yaw curriculum at its start value, which is neither the frozen nor the
-full setting, so a policy trained with --freeze-yaw has to be replayed with it as well.
-The resolved yaw setting is printed at startup.
-
-Use --viewer viser on a headless machine; the native viewer requires a display. With
---video the run is additionally recorded to an mp4 under the run's log directory.
-"""
+"""Replay a checkpoint or scripted agent in an interactive viewer."""
 
 import argparse
 import os
@@ -87,7 +74,7 @@ def main() -> None:
     parser.add_argument(
         "--freeze-yaw",
         action="store_true",
-        help="Hold the hook at its home yaw, matching train_low_level_stage.py "
+        help="Hold the hook at its home yaw, matching scripts/train_low_level_stage.py "
         "--freeze-yaw. Without this the play session still runs the curriculum at its "
         "start value of 0.10, so a policy trained with the yaw frozen would be watched "
         "under conditions it never saw.",
@@ -99,8 +86,7 @@ def main() -> None:
 
     _maybe_force_cpu()
 
-    # Importing the package registers the normal training task. We then patch only
-    # this process and register a separate play-only task for teleport inspection.
+    # Register a process-local task after applying viewer overrides.
     import mjlab_jenga.jenga_mjenv_cfg as cfg
     from mjlab.scripts.play import PlayConfig, run_play
     from mjlab.tasks.registry import register_mjlab_task

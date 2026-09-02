@@ -2,11 +2,11 @@
 # Resume Mjlab-Jenga curriculum training from an existing checkpoint.
 #
 # Usage from repo root:
-#   sbatch train_resume_curriculum.sbatch <run_folder> <checkpoint>
-#   sbatch train_resume_curriculum.sbatch <run_folder> <checkpoint> 4000 256
+#   sbatch slurm/train_resume_curriculum.sbatch <run_folder> <checkpoint>
+#   sbatch slurm/train_resume_curriculum.sbatch <run_folder> <checkpoint> 4000 256
 #
 # Example:
-#   sbatch train_resume_curriculum.sbatch 2026-08-12_23-27-05 model_9499.pt
+#   sbatch slurm/train_resume_curriculum.sbatch 2026-08-12_23-27-05 model_9499.pt
 #
 # Args:
 #   1: run folder under logs/rsl_rl/jenga, required
@@ -27,7 +27,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-  echo "Usage: sbatch train_resume_curriculum.sbatch <run_folder> <checkpoint> [iterations] [num_envs]" >&2
+  echo "Usage: sbatch slurm/train_resume_curriculum.sbatch <run_folder> <checkpoint> [iterations] [num_envs]" >&2
   exit 2
 fi
 
@@ -39,9 +39,9 @@ NUM_ENVS="${4:-256}"
 if [[ "${LOAD_RUN}" == *low_level_* ]]; then
   echo "Refusing to resume a low-level stage with train_resume_curriculum.sbatch." >&2
   echo "Use instead:" >&2
-  echo "  sbatch train_resume_low_level.sbatch <stage> ${LOAD_RUN} ${CHECKPOINT} ${ITERS} ${NUM_ENVS}" >&2
+  echo "  sbatch slurm/train_resume_low_level.sbatch <stage> ${LOAD_RUN} ${CHECKPOINT} ${ITERS} ${NUM_ENVS}" >&2
   echo "Example:" >&2
-  echo "  sbatch train_resume_low_level.sbatch target ${LOAD_RUN} ${CHECKPOINT} ${ITERS} ${NUM_ENVS}" >&2
+  echo "  sbatch slurm/train_resume_low_level.sbatch target ${LOAD_RUN} ${CHECKPOINT} ${ITERS} ${NUM_ENVS}" >&2
   exit 2
 fi
 
@@ -58,7 +58,7 @@ export WANDB_MODE=disabled
 export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
-PYTHONUNBUFFERED=1 ./.venv/bin/python train.py Mjlab-Jenga \
+PYTHONUNBUFFERED=1 ./.venv/bin/python -m scripts.legacy.train Mjlab-Jenga \
   --agent.logger tensorboard \
   --agent.resume True \
   --agent.load-run "${LOAD_RUN}" \

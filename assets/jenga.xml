@@ -79,7 +79,7 @@
                 density="2000"/>
         </body>
 
-        
+
         <body name="b1_1" pos="-0.0505 0 0.0155" >
             <joint type="free"/>
 
@@ -113,7 +113,7 @@
             />
         </body>
 
-        
+
         <body name="b2_1" pos="0 0.0505 0.046" euler="0 0 90">
             <joint type="free"/>
 
@@ -147,7 +147,7 @@
             />
         </body>
 
-        
+
         <body name="b3_1" pos="-0.0505 0 0.0765" >
             <joint type="free"/>
 
@@ -181,7 +181,7 @@
             />
         </body>
 
-        
+
         <body name="b4_1" pos="0 0.0505 0.107" euler="0 0 90">
             <joint type="free"/>
 
@@ -215,7 +215,7 @@
             />
         </body>
 
-        
+
         <body name="b5_1" pos="-0.0505 0 0.1375" >
             <joint type="free"/>
 
@@ -249,7 +249,7 @@
             />
         </body>
 
-        
+
         <body name="b6_1" pos="0 0.0505 0.168" euler="0 0 90">
             <joint type="free"/>
 
@@ -283,7 +283,7 @@
             />
         </body>
 
-        
+
         <body name="b7_1" pos="-0.0505 0 0.1985" >
             <joint type="free"/>
 
@@ -317,7 +317,7 @@
             />
         </body>
 
-        
+
         <body name="b8_1" pos="0 0.0505 0.229" euler="0 0 90">
             <joint type="free"/>
 
@@ -351,7 +351,7 @@
             />
         </body>
 
-        
+
         <body name="b9_1" pos="-0.0505 0 0.2595" >
             <joint type="free"/>
 

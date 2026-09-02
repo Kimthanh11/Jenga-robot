@@ -2,10 +2,10 @@
 # Resume an explicit Jenga low-level stage.
 #
 # Usage:
-#   sbatch train_resume_low_level.sbatch <stage> <run_folder> <checkpoint> [additional_iterations] [num_envs]
+#   sbatch slurm/train_resume_low_level.sbatch <stage> <run_folder> <checkpoint> [additional_iterations] [num_envs]
 #
 # Example:
-#   sbatch train_resume_low_level.sbatch target 2026-08-19_12-24-50_low_level_target model_2500.pt 9500 768
+#   sbatch slurm/train_resume_low_level.sbatch target 2026-08-19_12-24-50_low_level_target model_2500.pt 9500 768
 
 #SBATCH --job-name=jenga_low
 #SBATCH -p stud
@@ -20,7 +20,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "Usage: sbatch train_resume_low_level.sbatch <stage> <run_folder> <checkpoint> [additional_iterations] [num_envs]" >&2
+  echo "Usage: sbatch slurm/train_resume_low_level.sbatch <stage> <run_folder> <checkpoint> [additional_iterations] [num_envs]" >&2
   exit 2
 fi
 
@@ -44,7 +44,7 @@ export WANDB_MODE=disabled
 export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
-PYTHONUNBUFFERED=1 ./.venv/bin/python train_low_level_stage.py "${STAGE}" \
+PYTHONUNBUFFERED=1 ./.venv/bin/python -m scripts.train_low_level_stage "${STAGE}" \
   --iterations "${ITERS}" \
   --num-envs "${NUM_ENVS}" \
   --load-run "${LOAD_RUN}" \

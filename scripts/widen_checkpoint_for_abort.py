@@ -1,32 +1,4 @@
-"""Widen a trained checkpoint by one action dimension so it can warm-start the abort task.
-
-The abort variant adds a fifth action but no observation, so the actor differs from a
-checkpoint of the base task in exactly three tensors:
-
-    mlp.4.weight                 (4, 64) -> (5, 64)
-    mlp.4.bias                   (4,)    -> (5,)
-    distribution.log_std_param   (4,)    -> (5,)
-
-The critic is unchanged, and so is the observation normalizer.
-
-The new output row is initialised to zero, so the abort signal starts at exactly 0
-while every existing action keeps its learned mapping. With the standard deviation at
-0.2 and the initial threshold at 0.98, a single step exceeds the threshold with
-probability about 5e-7 and the termination requires 100 consecutive crossings, so the
-warm-started policy behaves identically to the original until it learns otherwise.
-
-The Adam moment estimates are widened alongside the parameters. They cannot simply be
-dropped: a training resume calls PPO.load with no load_cfg, which defaults to loading
-the optimizer and indexes optimizer_state_dict directly, so a missing entry raises
-KeyError. Leaving them at the old width is equally wrong, because the optimizer would
-then hold moments of a different shape than the parameters they belong to.
-
-The three entries to widen are identified by their leading dimension matching the old
-action count. In a checkpoint of this architecture that selects exactly the output
-weight, the output bias and the log standard deviation; every other entry is shaped by
-the hidden width, the observation width or the critic's single output. The count is
-asserted so that a different architecture fails here rather than silently later.
-"""
+"""Add the abort action dimension to a trained checkpoint."""
 
 from __future__ import annotations
 

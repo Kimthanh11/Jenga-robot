@@ -17,7 +17,7 @@ class TowerState:
         for name in self.block_names:
             self.initial_pos[name] = self.data.body(name).xpos.copy()
 
-    # --- per-block measurements (all relative to the settled snapshot) --------
+    # Per-block measurements relative to the settled snapshot.
 
     def slide(self, name):
         dx, dy, _ = self.data.body(name).xpos - self.initial_pos[name]
@@ -31,7 +31,7 @@ class TowerState:
         up_z = self.data.body(name).xmat.reshape(3, 3)[2, 2]
         return float(np.degrees(np.arccos(np.clip(up_z, -1.0, 1.0))))
 
-    # --- whole-tower summaries ------------------------------------------------
+    # Tower-level summaries.
 
     def _others(self, exclude):
         if exclude is None:

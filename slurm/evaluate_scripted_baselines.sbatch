@@ -2,9 +2,9 @@
 # Evaluate simple controllers with the same scenarios and horizon as the policy.
 #
 # Usage:
-#   sbatch evaluate_scripted_baselines.sbatch heldout-legal 0
-#   sbatch evaluate_scripted_baselines.sbatch trained-legal 0,1,2,3 straight,pulsed,tap
-#   sbatch --array=0-19%2 evaluate_scripted_baselines.sbatch heldout-legal 0 protocol-array
+#   sbatch slurm/evaluate_scripted_baselines.sbatch heldout-legal 0
+#   sbatch slurm/evaluate_scripted_baselines.sbatch trained-legal 0,1,2,3 straight,pulsed,tap
+#   sbatch --array=0-19%2 slurm/evaluate_scripted_baselines.sbatch heldout-legal 0 protocol-array
 
 #SBATCH --job-name=jenga_base
 #SBATCH -p stud
@@ -31,10 +31,7 @@ RETREAT_STEPS="${10:-5}"
 CONTACT_X="${11:-0.0}"
 CONTACT_Z="${12:-0.0}"
 
-# The report protocol has four controllers and five seeds.  Running all twenty
-# combinations serially exceeds the cluster time limit, especially on held-out
-# targets.  Array index 0..19 selects one controller/seed pair while retaining the
-# named target set in every CSV.
+# Array index 0..19 selects one controller and seed pair.
 if [ "${CONTROLLERS}" = "protocol-array" ]; then
   if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
     echo "protocol-array requires: sbatch --array=0-19%N ..." >&2
@@ -76,7 +73,7 @@ export WANDB_MODE=disabled
 export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
-PYTHONUNBUFFERED=1 ./.venv/bin/python evaluate_scripted_baselines.py \
+PYTHONUNBUFFERED=1 ./.venv/bin/python -m scripts.evaluate_scripted_baselines \
   --controllers "${CONTROLLERS}" \
   --targets "${TARGETS}" \
   --missing-levels "${LEVELS[@]}" \

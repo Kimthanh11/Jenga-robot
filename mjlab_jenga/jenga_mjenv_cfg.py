@@ -1,39 +1,13 @@
-"""Manager-based MuJoCo environment for learning Jenga block extraction.
-
-Defines the nine-layer tower of 27 rigid blocks, the hook-shaped tool, and the
-observation, action, reward, termination and event terms that make up the task, along
-with the PPO runner configuration.
-
-The task is a single extraction: a target block is sampled at reset, the hook is placed
-at a scripted target-specific home pose, and the policy pushes the block out while the
-remainder of the tower must stay within its stability limits. Observations and actions
-are expressed in a frame local to the selected block, so one policy applies to blocks
-in different layers and orientations.
-
-Action space (4 dimensions):
-    0    push / stop / retreat, mapped to the hook_slide velocity actuator
-    1-2  contact point on the target block face
-    3    incremental hook yaw
-
-Curricula are driven by env.common_step_counter, which mjlab persists across resumes:
-the success distance ramps from SUCCESS_CURRICULUM_START to SUCCESS_CURRICULUM_END, and
-apply_low_level_stage() selects the target-sampling and missing-block regime for a
-training stage.
-
-Companion scripts: train_low_level_stage.py trains a stage, evaluate_low_level.py
-produces per-target deterministic statistics, feasibility_sweep.py and calibrate_drag.py
-establish which targets and contact parameters are admissible.
-"""
+"""Manager-based MuJoCo environment for Jenga block extraction."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import mujoco
 import torch
-import math
 
 from mjlab.utils.lab_api.math import quat_apply_inverse, quat_apply
 from mjlab.terrains import TerrainEntityCfg
@@ -72,14 +46,12 @@ from mjlab.viewer import ViewerConfig
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
 
-# Tower Configurations
+# Tower geometry and physics
 LAYERS = 9
 BLOCKS_PER_LAYER = 3
 
 BLOCK_SIZE = (0.05, 0.15, 0.03)
 BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
-# Per-block build-time domain randomization. Keep this small: larger shape
-# variation can create unrealistic overlaps in the stacked tower.
 BLOCK_DENSITY = 650.0
 BLOCK_DENSITY_RANDOMIZATION = 0.0
 BLOCK_SIZE_RANDOMIZATION = (0.0, 0.0, 0.0)
@@ -89,8 +61,6 @@ RESET_FRICTION_TORSIONAL_RANGE = (0.012, 0.055)
 RESET_FRICTION_ROLLING_RANGE = (0.001, 0.001)
 TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT = 0.012
 TOWER_SUCCESS_MAX_BLOCK_VERTICAL_SHIFT = 0.008
-# Out-of-plane tilt of any non-target block. These limits always described tipping;
-# the measurement, not the numbers, was wrong.
 TOWER_SUCCESS_MAX_BLOCK_ROTATION = math.radians(8.0)
 TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT = 0.025
 TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT = 0.015
@@ -111,25 +81,10 @@ SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
 START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
 LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
 
-# Horizontal block displacement is measured against the nominal spawn pose, so a tower
-# that slides across the floor as one rigid piece counts as damaged even though nothing
-# about it came apart. With this enabled the bottom layer's drift is subtracted first,
-# making the measure "how far has this block moved relative to the tower's base" --
-# shear and blocks sliding out of their layer still count, rigid translation does not.
-# Off by default until the A/B says it helps. Layer 1 is never a target and never a
-# missing-block candidate, so the base reference is always intact.
+# Measure tower deformation relative to its base instead of the world frame.
 TOWER_SHIFT_RELATIVE_TO_BASE = False
 
-# Contact softness of the block geoms, as MuJoCo solref = (timeconst, dampratio).
-# None keeps MuJoCo's default (0.02, 1). Lower timeconst means a stiffer contact;
-# MuJoCo clamps it to at least 2 * timestep, so 0.004 is the floor here.
-#
-# This is the remaining lever on the drag ratio. impratio took it from 0.81 to 0.19 by
-# stiffening the FRICTION constraints; solref governs how far the contacts deform in
-# the first place. Success at full extraction needs drag below 0.107 (12 mm of
-# neighbour movement over 112.5 mm of target movement), and the per-target drags
-# predict the sweep outcomes exactly: b3_1 at 0.098 succeeds, b6_3 at 0.149, b6_1 at
-# 0.181 and b7_1 at 0.252 all fail.
+# None keeps MuJoCo's default contact softness.
 BLOCK_SOLREF: tuple[float, float] | None = None
 
 
@@ -145,8 +100,7 @@ MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.35
 MISSING_BLOCK_DOUBLE_BEGIN_STEP = 250_000
 MISSING_BLOCK_TRIPLE_BEGIN_STEP = 500_000
 FORCED_MISSING_BLOCK_COUNT: int | None = None
-# Evaluation can provide an exact, target-valid set of patterns. They are assigned in
-# a deterministic cycle over the vectorized environments; training leaves this unset.
+# Optional deterministic patterns for evaluation.
 FORCED_MISSING_PATTERN_IDS: tuple[int, ...] | None = None
 FORCED_MISSING_PATTERN_OFFSET = 0
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
@@ -160,12 +114,7 @@ RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 1
 RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
 RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
 FIXED_TARGET_BLOCK_NAME = "b6_1"
-# b1_1 and b1_3 are deliberately absent: the scripted full-push controller cannot
-# extract them. They end in step_cap rather than damage -- the tower holds, the block
-# simply stops after ~25 mm with the actuator at 5-6 N, at or above its stall force.
-# Layer 1 carries the whole tower, so this is a real force limit, not a policy failure,
-# and keeping them would hand PPO episodes it cannot win. Revisit if the push actuator
-# is ever given a larger force budget.
+# Targets that passed the scripted feasibility sweep.
 RANDOM_TARGET_BLOCK_NAMES = (
     "b2_1",
     "b2_2",
@@ -175,27 +124,6 @@ RANDOM_TARGET_BLOCK_NAMES = (
     "b9_2",
     "b9_3",
 )
-# Candidate blocks are admitted only if a scripted push can extract them safely. A
-# safe success requires every non-target block to remain within
-# TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT while the target travels the full success
-# distance, giving a drag-ratio threshold of 12 / 112.5 = 0.107. Measured drag ratios
-# reproduce the outcome of the scripted sweep in feasibility_sweep.py:
-#
-#     b3_1  0.098  extractable        b6_3  0.149  not extractable
-#     b6_1  0.181  not extractable    b7_1  0.252  not extractable
-#
-# b6_1, b6_2, b6_3, b7_1 and b7_3 exceed the threshold and are excluded. Contact
-# parameters were calibrated first (see calibrate_drag.py): impratio reduced the drag
-# ratio from 0.81 to 0.26, which is what makes any target solvable. Beyond that, a
-# solref sweep over the block geoms yields a shallow optimum at 0.01 worth 13 percent
-# (0.232 against 0.267 at the default), with the simulation diverging at 0.04 and
-# above. That does not close the remaining factor of 2.2: at a drag ratio of 0.232 a
-# neighbouring block still travels 26 mm over a full 112.5 mm extraction against a
-# 12 mm allowance.
-#
-# The calibrated scripted controller cannot extract these blocks under the 12 mm
-# stability allowance. This is an empirical exclusion for the present actuator and
-# controller family, not a proof that no controller could extract them.
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
 HOOK_APPROACH_GAP = 0.02
@@ -203,14 +131,7 @@ HOOK_BOTTOM_LAYER_Z_LIFT = 0.006
 
 COLOR_A = (0.68, 0.85, 0.90, 1.0)
 COLOR_B = (0.96, 0.96, 0.95, 1.0)
-
-
-
-# get the Scene configurations
-_JENGA_XML = Path(__file__).parent.parent / "jenga.xml"
 _HOOK1_CFG = SceneEntityCfg("hook", joint_names=("hook_slide",))
-_HOOK2_CFG = SceneEntityCfg("jenga", joint_names=("hook_slide2",))
-_HOOK3_CFG = SceneEntityCfg("jenga", joint_names=("hook_slide3",))
 _HOOK_Y_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_y",))
 _HOOK_Z_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_z",))
 _TARGET_BLOCK_CFG = SceneEntityCfg("b6_1", body_names=("b6_1",))
@@ -224,10 +145,6 @@ _HOOK_ALL_CFG = SceneEntityCfg(
 )
 _HOOK_TIP_CFG = SceneEntityCfg("hook", site_names=("hook_tip",))
 _HOOK_JOINT_ORDER = ("hook_slide", "hook_slide_y", "hook_slide_z", "hook_yaw")
-
-
-
-#block entities
 def _vec(values) -> str:
     return " ".join(f"{v:g}" for v in values)
 
@@ -423,11 +340,8 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
     for idx, entry in enumerate(entries):
         entry["neighbors"] = [other for other in by_layer[entry["layer"]] if other != idx]
 
-    # Fixed 8 slots describing the target's structural surroundings:
-    #   [same-layer x2, layer above x3, layer below x3]
-    # Slot meaning is identical for every target, so the policy can read them the same
-    # way regardless of which block it was assigned. Slots that cannot exist (no layer
-    # above for layer 9, none below for layer 1) are marked invalid rather than absent.
+    # Fixed slots: same-layer x2, layer above x3, layer below x3.
+    # Structurally impossible slots are masked separately from missing blocks.
     for idx, entry in enumerate(entries):
         layer = entry["layer"]
         groups = (
@@ -451,12 +365,7 @@ def _target_block_entries() -> tuple[list[str], list[dict]]:
 
 
 class TargetBlockCommand(CommandTerm):
-    """Curriculum command for target-block selection and hook teleport.
-
-    At the beginning, every env keeps the old fixed target b6_1. Once
-    random_target_block_scale becomes non-zero, some reset envs sample a safe target
-    block and the hook is teleported in front of that block's push face.
-    """
+    """Select a target block and place the hook at its approach pose."""
 
     cfg: "TargetBlockCommandCfg"
 
@@ -662,12 +571,7 @@ class TargetBlockCommand(CommandTerm):
         return self._cur_max_block_rotation
 
     def selected_support_presence(self) -> torch.Tensor:
-        """Presence of the blocks structurally around the target, per fixed slot.
-
-        1 = present, 0 = removed, -1 = the slot cannot exist for this target. The three
-        values are distinct on purpose: "there is no layer below me" is a different
-        situation from "the block below me was taken away".
-        """
+        """Encode support slots as present (1), removed (0), or impossible (-1)."""
         idx = self._support_idx[self.selected_block_idx]
         valid = self._support_valid[self.selected_block_idx]
         present = torch.gather(self._cur_present.float(), 1, idx)
@@ -758,18 +662,8 @@ class TargetBlockCommand(CommandTerm):
             position_delta = position_delta - base_drift.unsqueeze(0)
         horizontal_shift = torch.norm(position_delta[:, :, :2], dim=-1)
         vertical_shift = torch.abs(position_delta[:, :, 2])
-        # Tilt, not total rotation. The previous form took the full quaternion angle
-        # against the spawn pose, which is dominated by rotation about the vertical
-        # axis: measured 77-96% yaw (b6_1 3.62 deg total of which 0.15 deg tilt, b7_1
-        # 2.80/0.12). A Jenga block that turns in its own plane still lies flat and
-        # still carries the layer above it -- that is not instability. Tipping is.
-        # Conflating them made the stability gate fire on a harmless quantity: training
-        # stalled at max_block_rot_deg_mean 6.7 against an 8 deg limit while actual tilt
-        # was around 0.2 deg.
-        #
-        # Blocks spawn flat, so measuring against world +Z rather than the spawn
-        # quaternion is equivalent and cheaper: for q = (w, x, y, z) the z-component of
-        # R*[0,0,1] is 1 - 2*(x^2 + y^2).
+        # Instability uses out-of-plane tilt; rotation around world Z is harmless yaw.
+        # Blocks spawn flat, so the local Z axis can be compared directly with world Z.
         current_quat = all_pose[:, :, 3:7]
         up_z = 1.0 - 2.0 * (
             current_quat[:, :, 1] ** 2 + current_quat[:, :, 2] ** 2
@@ -1085,7 +979,6 @@ def randomize_missing_blocks(
         asset.write_root_state_to_sim(root_state, env_ids=env_ids)
 
 
-# loads the jenga_xml into an Mjspec, which is editable
 def _spec_from_xml(xml: str) -> mujoco.MjSpec:
     return mujoco.MjSpec.from_string(xml)
 
@@ -1122,7 +1015,7 @@ def _get_hook_spec() -> mujoco.MjSpec:
   </worldbody>
 
   <actuator>
-    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.05 0.05" kv="150"/>    
+    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.05 0.05" kv="150"/>
     <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.13 0.23" kp="50"/>
     <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.17 0.13" kp="50"/>
     <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1.1 2.7" kp="20"/>
@@ -1132,7 +1025,6 @@ def _get_hook_spec() -> mujoco.MjSpec:
     return _spec_from_xml(xml)
 
 
-# tells mjlab those actuators are there. We DONT create a new object, unlike EntityCfg
 _HOOK_ARTICULATION = EntityArticulationInfoCfg(
     actuators=(
         XmlActuatorCfg(target_names_expr=("hook_slide",)),
@@ -1142,7 +1034,6 @@ _HOOK_ARTICULATION = EntityArticulationInfoCfg(
     ),
 )
 
-# blueprint for the Jenga-Entity (where is the model from and what are the actuators)
 def _get_hook_cfg() -> EntityCfg:
     return EntityCfg(
         spec_fn=_get_hook_spec,
@@ -1218,7 +1109,7 @@ def _build_entities() -> dict[str, EntityCfg]:
 
 def make_all_block_cfgs():
     all_block_cfgs = []
-    for block in _get_block_infos(): 
+    for block in _get_block_infos():
         name = block["name"]
         block_cfg = SceneEntityCfg(name, body_names=(name,))
         all_block_cfgs.append(block_cfg)
@@ -1273,14 +1164,7 @@ def randomize_block_physics(
         )
 
 def all_block_pos(env):
-    """Critic observation: every block's world position, zeros for absent blocks.
-
-    Two defects this avoids. Routing through target_block_pos() returned the CURRENTLY
-    SELECTED block for the b6_1 slot, because that helper short-circuits on the target
-    asset name -- so one of the 27 slots did not mean what its position implied. And
-    blocks removed by the missing-block randomization are parked 1.5 m away rather than
-    deleted, which fed the critic a metre-scale jump in three of the 81 inputs.
-    """
+    """Return fixed-slot world positions, using zeros for absent blocks."""
     positions = []
     for block_cfg in _ALL_BLOCK_CFGS:
         asset: Entity = env.scene[block_cfg.name]
@@ -1290,10 +1174,6 @@ def all_block_pos(env):
     return torch.cat(positions, dim=-1)
 
 
-# Observations
-
-
-#custom reward functions for the position/velocity of the target block position
 def target_block_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
     cmd = _target_command_or_none(env)
     if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
@@ -1313,11 +1193,8 @@ def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARG
     return velocity.squeeze(1)[:, :3]
 
 
-# get COM of the tower
 def get_com_per_block(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    """
-    get COM per block, expcept the target block. 
-    """
+    """Return each non-target block's center of mass."""
     blocks = _get_block_infos()
     block_com_all = []
     target_block_name = asset_cfg.name
@@ -1332,9 +1209,7 @@ def get_com_per_block(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TAR
 
 
 def get_com_tower(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    """
-    get the COM of all present tower blocks except the target block.
-    """
+    """Return the center of mass of all present non-target blocks."""
     target_block_name = asset_cfg.name
     total_com = torch.zeros(env.num_envs, 3, device=env.device)
     present_count = torch.zeros(env.num_envs, device=env.device)
@@ -1356,10 +1231,7 @@ def get_com_tower(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_
 def initial_tower_com(
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
 ) -> torch.Tensor:
-    """
-    Compute the initial tower COM from the initial block positions,
-    excluding the target block.
-    """
+    """Return the initial center of mass of all non-target blocks."""
     block_positions = []
     target_block_name = asset_cfg.name
 
@@ -1400,9 +1272,7 @@ def tower_com_shift(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
 ) -> torch.Tensor:
-    """
-    Computes the horizontal shift of the COM of the Tower.
-    """
+    """Return the tower's horizontal center-of-mass displacement."""
     cmd = _target_command_or_none(env)
     if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
         return cmd.selected_tower_shift()
@@ -1443,11 +1313,8 @@ def tower_stable_for_success(env: ManagerBasedRlEnv) -> torch.Tensor:
     )
 
 
-#convert gripper to local coordinate frame of the block
 def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
-    """
-    extracts quaternion and position of block
-    """
+    """Return target position and orientation."""
     cmd = _target_command_or_none(env)
     if cmd is not None and asset_cfg.name == _TARGET_BLOCK_CFG.name:
         pose = cmd.selected_target_pose_w()
@@ -1487,7 +1354,7 @@ def hook_tip_pos_in_block_frame(env : ManagerBasedRlEnv, asset_cfg : SceneEntity
     position = hook_tip_pos_world - block_pos_world #vector from block_center to tip of the hook
     hook_tip_pos_block  = quat_apply_inverse(block_quat_world, position)
 
-    return hook_tip_pos_block 
+    return hook_tip_pos_block
 
 
 def target_extraction_direction(
@@ -1615,13 +1482,7 @@ def target_selection_features(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def target_support_presence(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """Which blocks around the target are still there (8 fixed slots).
-
-    Without this the actor cannot tell an intact tower from one missing a supporting
-    block, while being penalized for instability and terminated on damage. Only the
-    critic saw the tower, so it could recognise danger during training that the actor
-    could not react to at execution time.
-    """
+    """Return the eight fixed support slots around the selected target."""
     cmd = _target_command_or_none(env)
     if cmd is None:
         return torch.zeros(env.num_envs, 8, device=env.device)
@@ -1629,11 +1490,7 @@ def target_support_presence(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def tower_state_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """How close the tower is to the damage limits, as fractions of those limits.
-
-    The actor is penalized for new instability and the episode terminates on damage,
-    but neither quantity was observable. A value of 1.0 means the limit is reached.
-    """
+    """Return tower deformation relative to each damage limit."""
     return torch.stack(
         (
             tower_max_block_horizontal_shift(env)
@@ -1648,8 +1505,7 @@ def tower_state_observation(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 def last_action(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """Previous action. There is an action-rate penalty the actor could not account
-    for without knowing what it did last step."""
+    """Return the previous action used by the action-rate objective."""
     return env.action_manager.prev_action
 
 
@@ -1669,18 +1525,9 @@ def _initial_block_pos(block_name: str) -> torch.Tensor:
 
 _START_REF_POS = (_initial_block_pos("b6_2") + _initial_block_pos("b6_3")) / 2
 _START_TARGET_REL_POS = _initial_block_pos("b6_1") - _START_REF_POS
-# Fraction of the block length that counts as extracted. START == END made this a
-# no-op: 0.75 * 0.15 m = 112.5 mm was required from step 0, and the scripted controller
-# needs 400-900 contact steps to get there, so early policies never saw a success at
-# all. Ramping from 2 cm gives every target a reachable signal early -- even the ones
-# that only reach 79-106 mm before tripping tower_damage.
+# Fraction of block length required for success, ramped from 20 to 112.5 mm.
 SUCCESS_CURRICULUM_START = 0.1333   # 2.0 cm
 SUCCESS_CURRICULUM_END = 0.75       # 11.25 cm
-# 200k was slower than learning needed at the easy end: the first run reached the
-# maximum attainable return within ~70 iterations at 2 cm and held it all the way
-# through 4.1 cm at iteration 1400. Since a 12-hour job only covers ~1000
-# iterations, that slack costs whole days of wall clock. Raise it again if the
-# return starts lagging the ramp.
 SUCCESS_CURRICULUM_STEPS = 120_000
 TOUCH_CURRICULUM_START = 1.0
 TOUCH_CURRICULUM_END = 1.0
@@ -2347,14 +2194,7 @@ class CurriculumYawActionCfg(ActionTermCfg):
 
 
 class CurriculumYawAction(ActionTerm):
-    """Relative yaw target, integrated on the COMMANDED target.
-
-    Integrating on the measured joint position instead makes the servo error identically
-    zero whenever the action is small, so the joint free-wheels under contact load and
-    the target ratchets along with it. Measured on b1_1: yaw drifted 90.1deg -> 85.7deg
-    while the target tracked it to within 0.06deg. At the ~0.2 m lever arm that is ~15 mm
-    of tip travel lost, and it cost ~25% of the delivered push force across all targets.
-    """
+    """Integrate relative yaw actions on the commanded target, not measured yaw."""
 
     cfg: CurriculumYawActionCfg
 
@@ -2670,34 +2510,7 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
         sim=SimulationCfg(
             nconmax=4096,
             njmax=4096,
-            # impratio is the stiffness of friction constraints relative to
-            # normal ones. At MuJoCo's default of 1.0 the two are equally compliant,
-            # so contacts creep tangentially well below the friction limit and the
-            # tower shears as a unit: pushing b6_1 displaces b8_1, two layers above,
-            # by 89% as far, and twists the top of the tower by 8.45 deg. Since
-            # tower_damage triggers at 25 mm for any non-target block, it fires at
-            # roughly 28 mm of target progress against a success distance of
-            # 112.5 mm, leaving 12 of 14 targets unextractable.
-            #
-            # Mean drag ratio over b6_1, b6_3, b3_1 and b7_1, pyramidal cone:
-            #
-            #        mu     impratio=1   impratio=10   impratio=30
-            #      0.20          0.566         0.323         0.270
-            #      0.28          0.615         0.272         0.196
-            #      0.48          0.896         0.285         0.194
-            #
-            # The sign of the friction dependence flips. At impratio=1 higher friction
-            # increases drag, because the quantity measured is compliance scaling with
-            # contact load. Once that compliance is removed, higher friction decreases
-            # drag, as neighbouring blocks hold one another. The configured friction
-            # range is therefore appropriate and impratio is the parameter that
-            # required correction. A value of 30 lies inside MuJoCo's recommended
-            # range of 10-100 for friction-critical contact and raises the number of
-            # extractable targets from 2 to 7 of 14.
-            #
-            # The elliptic cone is unusable here: it drives the reset settling
-            # transient past the damage limit, with tower_damage firing at step 6
-            # while the target is still stationary.
+            # Calibrated by scripts/calibrate_drag.py using pyramidal contact.
             mujoco=MujocoCfg(timestep=0.002, impratio=30.0),
         ),
         decimation=5,
@@ -2810,76 +2623,46 @@ def jenga_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-  return RslRlOnPolicyRunnerCfg(
-    actor=RslRlModelCfg(
-      hidden_dims=(64, 64),
-      activation="elu",
-      # The critic reads 81 raw block coordinates alongside joint angles and contact
-      # forces, which span very different scales.
-      obs_normalization=True,
-      # The standard deviation is fixed rather than learned.
-      #
-      # rsl_rl defaults std_range to (1e-6, 1e6) and constrains std with torch.clamp,
-      # whose gradient is zero outside the range. Either bound is therefore absorbing:
-      # once the entropy bonus drives log_std_param past log(1.0) no gradient returns
-      # it. Because clip_actions is applied after sampling, PPO continues to evaluate
-      # log-probabilities of samples that all execute as the same boundary action.
-      #
-      # Unbounded, this produced standard deviations of 117 and 743, a mean action norm
-      # of exactly 2.0 -- the maximum for four actions in [-1, 1] -- and an episode
-      # return of exactly -0.00005 * 4 * 2000 = -0.40, that is the action-magnitude
-      # penalty alone.
-      #
-      # At std 1.0 with actions in [-1, 1] roughly a third of samples per dimension are
-      # clipped. 0.2 is the value the policy converged to when the entropy term was not
-      # dominating.
-      #
-      # Note for resumed runs: load_state_dict overwrites init_std with the value
-      # stored in the checkpoint, and requires_grad=False then pins it. Use
-      # fix_checkpoint_std.py before resuming from a checkpoint with a saturated std.
-      distribution_cfg={
-        "class_name": "GaussianDistribution",
-        "init_std": 0.2,
-        "std_type": "log",
-        "std_range": (0.05, 1.0),
-        "learn_std": False,
-      },
-    ),
-    critic=RslRlModelCfg(
-      hidden_dims=(64, 64),
-      activation="elu",
-      obs_normalization=True,
-    ),
-    algorithm=RslRlPpoAlgorithmCfg(
-      value_loss_coef=1.0,
-      use_clipped_value_loss=True,
-      clip_param=0.2,
-      # No effect while the policy standard deviation is fixed: the entropy of a
-      # Gaussian depends only on its standard deviation, so with learn_std=False this
-      # term contributes a constant and its gradient is identically zero. Retained so
-      # that the value is defined if std is made learnable again; 0.002 was the
-      # largest setting under which the policy gradient still pulled std down rather
-      # than the entropy bonus pushing it into the clip region.
-      entropy_coef=0.002,
-      num_learning_epochs=5,
-      num_mini_batches=4,
-      learning_rate=1.0e-3,
-      schedule="adaptive",
-      gamma=0.99,
-      lam=0.95,
-      desired_kl=0.01,
-      max_grad_norm=1.0,
-    ),
-    experiment_name="jenga",
-    clip_actions=1.0,
-    # A 12-hour job reaches roughly 900-1400 iterations, so saving every 500 threw
-    # away 411 iterations when the first run was cut off at 911. This task needs
-    # several chained resume jobs to finish its curriculum, so that loss compounds.
-    # Checkpoints are ~220 KB.
-    save_interval=100,
-    num_steps_per_env=32,
-    max_iterations=10000,
-  )
+    return RslRlOnPolicyRunnerCfg(
+        actor=RslRlModelCfg(
+            hidden_dims=(64, 64),
+            activation="elu",
+            obs_normalization=True,
+            # Fixed after learned std repeatedly saturated against action clipping.
+            distribution_cfg={
+                "class_name": "GaussianDistribution",
+                "init_std": 0.2,
+                "std_type": "log",
+                "std_range": (0.05, 1.0),
+                "learn_std": False,
+            },
+        ),
+        critic=RslRlModelCfg(
+            hidden_dims=(64, 64),
+            activation="elu",
+            obs_normalization=True,
+        ),
+        algorithm=RslRlPpoAlgorithmCfg(
+            value_loss_coef=1.0,
+            use_clipped_value_loss=True,
+            clip_param=0.2,
+            entropy_coef=0.002,
+            num_learning_epochs=5,
+            num_mini_batches=4,
+            learning_rate=1.0e-3,
+            schedule="adaptive",
+            gamma=0.99,
+            lam=0.95,
+            desired_kl=0.01,
+            max_grad_norm=1.0,
+        ),
+        experiment_name="jenga",
+        clip_actions=1.0,
+        # Limit work lost at the cluster time limit.
+        save_interval=100,
+        num_steps_per_env=32,
+        max_iterations=10000,
+    )
 
 
 

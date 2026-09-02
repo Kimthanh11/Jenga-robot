@@ -2,11 +2,10 @@
 # Sequential-play experiment: how many blocks come out of one tower in a row.
 #
 # Usage:
-#   sbatch play_sequential.sbatch <checkpoint> [games] [order] [extra flags]
+#   sbatch slurm/play_sequential.sbatch <checkpoint> [games] [order] [extra flags]
 #
-#   sbatch play_sequential.sbatch logs/rsl_rl/jenga/<run>/model_8500.pt
-#   sbatch play_sequential.sbatch <ckpt> 20 "b9_1,b2_1,b3_1,b9_3,b2_3,b9_2,b2_2"
-#   sbatch play_sequential.sbatch <ckpt> 20 "" --cumulative
+#   sbatch slurm/play_sequential.sbatch logs/rsl_rl/jenga/<run>/model_8500.pt
+#   sbatch slurm/play_sequential.sbatch <ckpt> 20 "" --cumulative
 
 #SBATCH --job-name=jenga_seq
 #SBATCH -p stud
@@ -22,7 +21,7 @@ set -euo pipefail
 CHECKPOINT="${1:?checkpoint path required}"
 GAMES="${2:-20}"
 ORDER="${3:-}"
-shift 3 2>/dev/null || shift $# 
+shift 3 2>/dev/null || shift $#
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
@@ -36,7 +35,7 @@ echo "order:      ${ORDER:-default}"
 export WANDB_MODE=disabled
 export MUJOCO_GL=egl
 
-CMD=(./.venv/bin/python play_sequential.py
+CMD=(./.venv/bin/python -m scripts.play_sequential
   --checkpoint "${CHECKPOINT}"
   --games "${GAMES}"
   --device cuda:0

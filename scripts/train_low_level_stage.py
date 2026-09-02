@@ -1,15 +1,4 @@
-"""Train one low-level extraction stage with PPO.
-
-Stages are selected by name and configure target sampling and missing-block
-randomization via cfg.apply_low_level_stage(): "fixed" and "target" train on the
-complete tower, "missing1" through "missing3" progressively introduce towers with
-blocks already removed.
-
-Command-line overrides exist for the settings that are varied between runs -- entropy
-coefficient, curriculum length, target set, yaw limit and yaw freezing -- so that a
-comparison does not require editing the configuration module. The resolved command line
-is echoed by the accompanying sbatch script.
-"""
+"""Train or resume one low-level block-extraction stage."""
 
 from __future__ import annotations
 
@@ -30,9 +19,7 @@ def main() -> None:
     parser.add_argument("--num-envs", type=int, default=768)
     parser.add_argument("--load-run", default=None)
     parser.add_argument("--load-checkpoint", default=None)
-    # Overrides for A/B runs. Defaults stay in the config so a plain invocation is
-    # always the committed setting; anything set here is echoed into the run name so
-    # two concurrent runs stay distinguishable in the log directory.
+    # Optional overrides for controlled comparisons.
     parser.add_argument(
         "--entropy-coef",
         type=float,
@@ -80,7 +67,7 @@ def main() -> None:
         help="Train the abort variant: adds a fifth action that ends the episode when "
         "held over a threshold, so a block that cannot be extracted safely can be "
         "abandoned. Warm-start from a base checkpoint widened by "
-        "widen_checkpoint_for_abort.py.",
+        "scripts/widen_checkpoint_for_abort.py.",
     )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
@@ -101,8 +88,7 @@ def main() -> None:
         cfg.RANDOM_TARGET_BLOCK_NAMES = tuple(
             t.strip() for t in args.targets.split(",") if t.strip()
         )
-    # The abort module builds on cfg and reads its globals, so every override above
-    # still applies; only the environment and runner factories come from elsewhere.
+    # The abort variant shares these globals with the base configuration.
     task = cfg
     if args.abort:
         import mjlab_jenga.jenga_abort_cfg as abort_cfg

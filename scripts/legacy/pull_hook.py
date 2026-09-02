@@ -1,18 +1,18 @@
 import mujoco
 import mujoco.viewer
-import time
+from pathlib import Path
 
-from tower_state import TowerState
+from scripts.legacy.tower_state import TowerState
 
 
-model = mujoco.MjModel.from_xml_path("jenga.xml")
+model = mujoco.MjModel.from_xml_path(
+    str(Path(__file__).resolve().parents[2] / "assets" / "jenga.xml")
+)
 data = mujoco.MjData(model)
 
 print("Number of actuators:", model.nu)
 
 SETTLE_TIME = 1.0
-PUSH_DURATION = 40
-PAUSE_DURATION = 1.0
 PUSH_CTRL = -1.0
 PRINT_EVERY = 0.5  # seconds between state printouts
 

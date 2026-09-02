@@ -1,10 +1,4 @@
-"""Reproducible per-target evaluation of a trained Jenga policy.
-
-Every original vector environment contributes exactly one episode.  This avoids the
-fast-episode bias of repeatedly resetting successful environments while slow failures
-are still running.  The per-episode CSV is the primary result; the summary CSV is a
-convenience view with confidence intervals.
-"""
+"""Evaluate a trained checkpoint per target and write episode metrics."""
 
 from __future__ import annotations
 
@@ -182,9 +176,7 @@ def _run_policy_batch(
     retreat_steps = torch.zeros(env.num_envs, device=env.device)
     rows: list[dict] = []
 
-    # mjlab mutates simulator and manager tensors during step/reset.  Inference mode
-    # marks newly created tensors as immutable outside its scope, which breaks a later
-    # manager reset.  no_grad disables autograd without imposing that restriction.
+    # mjlab mutates tensors during reset, which is incompatible with inference_mode.
     with torch.no_grad():
         for _ in range(max_steps):
             live = active & ~finished
@@ -246,8 +238,7 @@ def _run_policy_batch(
                 )
             finished[first_done] = True
 
-            # Manual-reset mode requires every terminated environment to be reset,
-            # including inactive or already recorded ones. They remain ignored.
+            # Reset every terminated environment; completed ones remain ignored.
             done_ids = torch.nonzero(dones, as_tuple=False).squeeze(-1)
             if done_ids.numel() > 0:
                 env.reset(env_ids=done_ids)
@@ -423,8 +414,7 @@ def main() -> None:
         task = abort_cfg
 
     cfg.apply_low_level_stage("target")
-    # Report evaluation always uses the final extraction distance, independent of the
-    # training counter stored in the checkpoint.
+    # Evaluation always uses the final extraction distance.
     cfg.SUCCESS_CURRICULUM_START = cfg.SUCCESS_CURRICULUM_END
     if args.yaw_limit is not None:
         cfg.YAW_TARGET_LIMIT = args.yaw_limit

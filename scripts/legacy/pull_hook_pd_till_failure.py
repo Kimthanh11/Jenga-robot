@@ -1,28 +1,17 @@
-"""Push each target block "till failure": keep pushing while the block still
-moves, and stop as soon as it stalls (it's either fully out or jammed). Unlike
-pull_hook_pd.py this has no fixed time schedule — each push ends when the block
-stops responding, then the next hook takes over.
-
-The push force is capped by a height-dependent budget (lots of force low in the
-tower, little up top) so high blocks aren't launched. Each hook drives its block
-through real hook-to-block contact.
-
-Run with the viewer (macOS): mjpython pull_hook_pd_till_failure.py
-Optional log file:           mjpython pull_hook_pd_till_failure.py --log-file run.txt
-"""
+"""Push each configured block until it stalls or reaches the time limit."""
 
 import argparse
 import logging
+from pathlib import Path
 import sys
 
 import numpy as np
 import mujoco
 import mujoco.viewer
 
-from tower_state import TowerState
+from scripts.legacy.tower_state import TowerState
 
 
-# --- logging: stdout by default, optional file via --log-file -----------------
 parser = argparse.ArgumentParser(description="Push Jenga blocks till failure")
 parser.add_argument("--log-file", default=None,
                     help="write logs to this file instead of stdout")
@@ -37,12 +26,13 @@ logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=[handler]
 log = logging.getLogger("jenga")
 
 
-model = mujoco.MjModel.from_xml_path("jenga.xml")
+model = mujoco.MjModel.from_xml_path(
+    str(Path(__file__).resolve().parents[2] / "assets" / "jenga.xml")
+)
 data = mujoco.MjData(model)
 
 LAYERS = 9
 
-# PD position controller (same gains as pull_hook_pd.py).
 KP = 80.0
 KD = 10.0
 FORCE_MAX = 10.0        # force budget at the bottom layer (N)
@@ -53,8 +43,7 @@ STALL_SPEED = 0.005     # block speed (m/s) below which it counts as "not moving
 STALL_TIME = 1.0        # seconds stalled before we declare the push finished
 MAX_PUSH_TIME = 20.0    # hard cap per block so we never push forever
 
-# Each pusher: hook joint + the block it targets (layer, pos).
-# These three were picked by auto_search.py as SAFE & fully extractable.
+# Hook joint and target block (layer, position).
 pushers = [
     ("hook_slide",  2, 2),   # low
     ("hook_slide2", 5, 1),   # middle

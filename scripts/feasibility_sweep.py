@@ -1,21 +1,4 @@
-"""Vectorized feasibility sweep over candidate target blocks.
-
-Measures which blocks this particular scripted full-push controller can extract and at
-what actuator force, across contact points, friction values and seeds. Failure is
-evidence about this controller and parameter range, not proof that a target is
-physically impossible or unsuitable for reinforcement learning.
-
-Layout: one environment per (target, contact point). Friction and seed are swept as
-repeated passes over the same environments rather than as additional environments,
-because randomize_block_physics reads the friction range from the module globals at
-reset time and therefore cannot vary within a batch.
-
-The per-environment target assignment is read back from the command term and asserted
-against the requested list. Without that check a silently ignored force_target_names
-produces a full sweep of plausible-looking rows measured on randomly chosen blocks.
-
-Emits one CSV row per (target, contact point, friction, seed) combination.
-"""
+"""Measure scripted extraction feasibility across targets and settings."""
 
 from __future__ import annotations
 
@@ -29,15 +12,7 @@ def _parse_floats(value: str) -> list[float]:
 
 
 def _append_row(csv_path, row) -> None:
-    """Append one result row to the CSV, creating the file and header if needed.
-
-    Rows are written as they are produced rather than buffered until the end, so that
-    a run terminated by its scheduler time limit still yields the cases it completed.
-
-    Args:
-        csv_path: Destination path, or None to disable writing.
-        row: Mapping of column name to value; its keys define the header.
-    """
+    """Append a result immediately so partial Slurm runs remain usable."""
     if csv_path is None:
         return
     path = Path(csv_path)
@@ -127,10 +102,7 @@ def main() -> None:
     cfg.apply_low_level_stage("fixed")
     cfg.YAW_CURRICULUM_START = 0.0
     cfg.YAW_CURRICULUM_END = 0.0
-    # The success distance normally ramps with the training curriculum. A feasibility
-    # measurement must not inherit that: it answers "can this block be extracted", which
-    # means the full distance, not whatever the curriculum happens to start at. Without
-    # this pin every target trivially "succeeds" at the 2 cm curriculum start.
+    # Feasibility is measured at the final extraction distance.
     cfg.SUCCESS_CURRICULUM_START = args.success_fraction
     cfg.SUCCESS_CURRICULUM_END = args.success_fraction
     if args.lock_yaw:
@@ -156,8 +128,7 @@ def main() -> None:
         slide_ids, _ = hook.find_joints(("hook_slide",), preserve_order=True)
         slide_dof = int(slide_ids[0])
 
-        # force_target_names cycles over envs, so env i has targets[i % len(targets)]
-        # and therefore contact point index i // len(targets).
+        # Targets cycle fastest; contact points cycle across target batches.
         action = torch.zeros((num_envs, env.action_manager.total_action_dim), device=env.device)
         action[:, 0] = args.action_x
         for env_idx in range(num_envs):
@@ -196,8 +167,7 @@ def _run_pass(*, env, cfg, torch, action, targets, contact_points, slide_dof,
     dev = env.device
     env.reset(seed=seed)
 
-    # Never trust the label: read back which block each env actually selected. A silent
-    # mismatch here produces a full sweep of plausible-looking but meaningless rows.
+    # Verify that forced target assignment reached the command term.
     cmd = env.command_manager.get_term("target_block")
     actual = [cmd._all_names[i] for i in cmd.selected_block_idx.tolist()]
     expected = [targets[i % len(targets)] for i in range(num_envs)]
@@ -221,8 +191,7 @@ def _run_pass(*, env, cfg, torch, action, targets, contact_points, slide_dof,
     final_success = torch.zeros(num_envs, dtype=torch.bool, device=dev)
     final_damage = torch.zeros(num_envs, dtype=torch.bool, device=dev)
     final_steps = torch.zeros(num_envs, dtype=torch.long, device=dev)
-    # "damage" alone does not say WHICH limit tripped: the tower sliding, sinking, or
-    # tilting are different failures with different fixes.
+    # Record the individual damage criterion for diagnosis.
     max_tower_xy = torch.zeros(num_envs, device=dev)
     max_tower_z = torch.zeros(num_envs, device=dev)
     max_tower_rot = torch.zeros(num_envs, device=dev)
@@ -299,8 +268,7 @@ def _run_pass(*, env, cfg, torch, action, targets, contact_points, slide_dof,
 
         done_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
         if done_ids.numel() > 0:
-            # auto_reset is off, so terminal envs must be reset explicitly before the
-            # next step. They are already latched, so their restart is ignored.
+            # Manual reset is required when auto_reset is disabled.
             env.reset(env_ids=done_ids)
 
         if bool(finished.all().item()):
