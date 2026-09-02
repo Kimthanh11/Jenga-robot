@@ -1,0 +1,1044 @@
+from __future__ import annotations
+
+# =====================================================================================
+# INCOMPLETE TOWER + RANDOM BLOCK ASSIGNMENT (merge of jenga_incomplete.py and
+# jenga_random_block_cfg.py).
+#
+# From Thanh's jenga_incomplete.py: REMOVED_BLOCKS are physically absent from the
+# scene (rng draws are kept for all 27 blocks so the remaining blocks get exactly the
+# same per-block noise/friction as in the complete tower), and the critic observation
+# keeps the fixed 27x3 layout with zeros for missing blocks, so the layout does not
+# change when REMOVED_BLOCKS changes.
+#
+# From jenga_random_block_cfg.py: JengaPushCommand picks a random selectable block
+# per env at reset and teleports the hook in front of it; obs/rewards live in the
+# block's task frame (+X_task == extraction direction).
+#
+# New here: same-layer neighbour references are ragged in an incomplete tower (a layer
+# can lose 1 or 2 blocks), so the neighbour index is padded with a mask; blocks with
+# zero neighbours fall back to a world-fixed reference (ref = 0, start_rel = start
+# position, i.e. no drift correction).
+# =====================================================================================
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import mujoco
+import torch
+import math
+
+from mjlab.utils.lab_api.math import quat_apply_inverse, sample_uniform
+from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
+from mjlab.terrains import TerrainEntityCfg
+from mjlab.actuator.xml_actuator import XmlActuatorCfg
+from mjlab.entity import Entity, EntityArticulationInfoCfg, EntityCfg
+from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs.mdp import (
+  joint_pos_rel,
+  joint_vel_rel,
+  reset_joints_by_offset,
+  time_out,
+)
+from mjlab.envs.mdp.actions import (
+    JointEffortActionCfg,
+    JointVelocityActionCfg,
+    RelativeJointPositionActionCfg,
+)
+from mjlab.envs.mdp.rewards import joint_torques_l2, action_rate_l2
+from mjlab.managers.action_manager import ActionTermCfg
+from mjlab.managers.event_manager import EventTermCfg
+from mjlab.managers.observation_manager import (
+  ObservationGroupCfg,
+  ObservationTermCfg,
+)
+from mjlab.managers.reward_manager import RewardTermCfg
+from mjlab.managers.scene_entity_config import SceneEntityCfg
+from mjlab.managers.termination_manager import TerminationTermCfg
+from mjlab.managers.metrics_manager import MetricsTermCfg
+from mjlab.rl import (
+  RslRlModelCfg,
+  RslRlOnPolicyRunnerCfg,
+  RslRlPpoAlgorithmCfg,
+)
+from mjlab.scene import SceneCfg
+from mjlab.sim import MujocoCfg, SimulationCfg
+from mjlab.viewer import ViewerConfig
+
+
+if TYPE_CHECKING:
+  from mjlab.envs import ManagerBasedRlEnv
+
+# Tower Configurations
+LAYERS = 9
+BLOCKS_PER_LAYER = 3
+
+# Blocks physically removed from the tower (same set Thanh's converged incomplete-tower
+# policy was trained with).
+REMOVED_BLOCKS = {
+    "b4_1",
+    "b4_3",
+    "b5_2",
+}
+
+BLOCK_SIZE = (0.05, 0.15, 0.03)
+BLOCK_HALF_SIZE = tuple(v / 2 for v in BLOCK_SIZE)
+
+SIDE_SPACING = BLOCK_SIZE[0] + 0.0005
+START_Z = (BLOCK_SIZE[2] / 2) + 0.0005
+LAYER_HEIGHT = BLOCK_SIZE[2] + 0.0005
+
+COLOR_A = (0.68, 0.85, 0.90, 1.0)
+COLOR_B = (0.96, 0.96, 0.95, 1.0)
+
+
+
+# get the Scene configurations
+_JENGA_XML = Path(__file__).parent.parent / "jenga.xml"
+_HOOK1_CFG = SceneEntityCfg("hook", joint_names=("hook_slide",))
+_HOOK_Y_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_y",))
+_HOOK_Z_CFG = SceneEntityCfg("hook", joint_names=("hook_slide_z",))
+_TARGET_BLOCK_CFG = SceneEntityCfg("b6_1", body_names=("b6_1",))
+_REF_BLOCK_1_CFG = SceneEntityCfg("b6_2", body_names=("b6_2",))
+_REF_BLOCK_2_CFG = SceneEntityCfg("b6_3", body_names=("b6_3",))
+_HOOK_YAW_CFG = SceneEntityCfg("hook", joint_names=("hook_yaw",))
+_HOOK_ALL_CFG = SceneEntityCfg(
+    "hook",
+    joint_names=("hook_yaw", "hook_slide", "hook_slide_y", "hook_slide_z"),
+)
+_HOOK_TIP_CFG = SceneEntityCfg("hook", site_names=("hook_tip",))
+
+
+
+#block entities
+def _vec(values) -> str:
+    return " ".join(f"{v:g}" for v in values)
+
+
+def _quat_from_z_rotation_deg(angle_deg: float) -> tuple[float, float, float, float]:
+    angle = math.radians(angle_deg)
+    return (math.cos(angle / 2), 0.0, 0.0, math.sin(angle / 2))
+
+
+def _get_all_block_infos():
+    import random
+
+    rng = random.Random(0)
+    block_infos = []
+
+    for layer in range(1, LAYERS + 1):
+        for block in range(1, BLOCKS_PER_LAYER + 1):
+            z = START_Z + (layer - 1) * LAYER_HEIGHT
+
+            if layer % 2 == 1:
+                x_positions = [-SIDE_SPACING, 0, SIDE_SPACING]
+                x = x_positions[block - 1] + rng.uniform(-0.0005, 0.0005)
+                y = 0.0 + rng.uniform(-0.0005, 0.0005)
+                yaw_noise = rng.uniform(-1.0, 1.0)
+                quat = _quat_from_z_rotation_deg(0.0 + yaw_noise)
+            else:
+                y_positions = [SIDE_SPACING, 0, -SIDE_SPACING]
+                x = 0.0 + rng.uniform(-0.0005, 0.0005)
+                y = y_positions[block - 1] + rng.uniform(-0.0005, 0.0005)
+                yaw_noise = rng.uniform(-1.0, 1.0)
+                quat = _quat_from_z_rotation_deg(90.0 + yaw_noise)
+
+            if layer % 2 == 1:
+                color = COLOR_A if block in (1, 3) else COLOR_B
+            else:
+                color = COLOR_B if block in (1, 3) else COLOR_A
+
+            sliding = rng.uniform(0.2, 0.4)
+            torsional = rng.uniform(0.01, 0.06)
+            friction = (sliding, torsional, 0.001)
+
+            block_infos.append({
+                "name": f"b{layer}_{block}",
+                "pos": (x, y, z),
+                "quat": quat,
+                "color": color,
+                "friction": friction,
+            })
+
+    return block_infos
+
+
+def _get_block_infos():
+    """Return only the blocks that are physically present in the tower."""
+    return [
+        block_info
+        for block_info in _get_all_block_infos()
+        if block_info["name"] not in REMOVED_BLOCKS
+    ]
+
+
+# loads the jenga_xml into an Mjspec, which is editable
+def _spec_from_xml(xml: str) -> mujoco.MjSpec:
+    return mujoco.MjSpec.from_string(xml)
+
+
+def _get_hook_spec() -> mujoco.MjSpec:
+    # IMPORTANT: hook_yaw is the FIRST joint in the chain (closest to the parent).
+    # In MuJoCo, joints of one body compose from parent outward, so a hinge before
+    # the slides rotates the slide axes too (verified empirically). With yaw=0 the
+    # hook pushes world -X (even blocks); with yaw=90deg hook_slide pushes world -Y
+    # (odd blocks). So hook_slide is ALWAYS the "push along the block's extraction
+    # axis" actuator, in the yawed frame -> the task looks identical for every block.
+    #
+    # Ranges are widened so the reset (JengaPushCommand) can teleport the hook in
+    # front of ANY selectable block. Position actuators' ctrlrange must cover those
+    # reset targets, otherwise MuJoCo clamps the servo target and the hook snaps back.
+    # yaw ctrlrange is in radians (approx -63deg..155deg) covering home 0deg+-60deg
+    # and home 90deg+-60deg.
+    xml = """
+<mujoco model="hook">
+  <compiler angle="degree" coordinate="local"/>
+
+  <worldbody>
+    <body name="hook" pos="0 0 0">
+      <joint name="hook_yaw" type="hinge" axis="0 0 1" range="-60 150" limited="true" damping="2"/>
+      <joint name="hook_slide" type="slide" axis="1 0 0" range="-0.22 0.16" limited="true" damping="2"/>
+      <joint name="hook_slide_y" type="slide" axis="0 1 0" range="-0.13 0.23" limited="true" damping="2"/>
+      <joint name="hook_slide_z" type="slide" axis="0 0 1" range="-0.17 0.13" limited="true" damping="2"/>
+
+      <geom type="box"
+            size="0.04 0.005 0.006"
+            pos="0 0 0"
+            rgba="0.1 0.1 0.9 1"
+            density="2000"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom type="box"
+            size="0.006 0.004 0.004"
+            pos="-0.05 0 0"
+            rgba="1 0 0 1"
+            density="2000"/>
+        <site name="hook_tip" pos="-0.056 0 0" size="0.003"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <velocity name="hook_x_vel" joint="hook_slide" ctrlrange="-0.08 0.08" kv="150"/>
+    <position name="hook_y_pos" joint="hook_slide_y" ctrlrange="-0.13 0.23" kp="50"/>
+    <position name="hook_z_pos" joint="hook_slide_z" ctrlrange="-0.17 0.13" kp="50"/>
+    <position name="hook_yaw_pos" joint="hook_yaw" ctrlrange="-1.1 2.7" kp="20"/>
+  </actuator>
+</mujoco>
+"""
+    return _spec_from_xml(xml)
+
+
+# tells mjlab those actuators are there. We DONT create a new object, unlike EntityCfg
+_HOOK_ARTICULATION = EntityArticulationInfoCfg(
+    actuators=(
+        XmlActuatorCfg(target_names_expr=("hook_slide",)),
+        XmlActuatorCfg(target_names_expr=("hook_slide_y",)),
+        XmlActuatorCfg(target_names_expr=("hook_slide_z",)),
+        XmlActuatorCfg(target_names_expr=("hook_yaw",)),
+    ),
+)
+
+# blueprint for the Jenga-Entity (where is the model from and what are the actuators)
+def _get_hook_cfg() -> EntityCfg:
+    return EntityCfg(
+        spec_fn=_get_hook_spec,
+        articulation=_HOOK_ARTICULATION,
+        init_state=EntityCfg.InitialStateCfg(
+            pos=(0.15, 0.05, 0.16),
+            joint_pos={
+                "hook_slide": 0.0,
+                "hook_slide_y": 0.0,
+                "hook_slide_z": 0.0,
+                "hook_yaw": 0.0,
+            },
+            joint_vel={".*": 0.0},
+        ),
+    )
+
+
+
+def _get_block_cfg(block_info) -> EntityCfg:
+    def _get_block_spec() -> mujoco.MjSpec:
+        xml = f"""
+<mujoco model="{block_info["name"]}">
+  <compiler angle="degree" coordinate="local"/>
+
+    <default>
+    <geom density="650"
+            margin="0"
+            gap="0"/>
+    </default>
+
+  <worldbody>
+    <body name="{block_info["name"]}" pos="{_vec(block_info["pos"])}" quat="{_vec(block_info["quat"])}">
+      <joint name="{block_info["name"]}_free" type="free"/>
+
+      <geom type="box"
+            size="{_vec(BLOCK_HALF_SIZE)}"
+            rgba="{_vec(block_info["color"])}"
+            friction="{_vec(block_info["friction"])}"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+        return _spec_from_xml(xml)
+
+    return EntityCfg(
+        spec_fn=_get_block_spec,
+        init_state=EntityCfg.InitialStateCfg(
+            pos=block_info["pos"],
+            rot=block_info["quat"],
+            lin_vel=(0.0, 0.0, 0.0),
+            ang_vel=(0.0, 0.0, 0.0),
+        ),
+    )
+
+
+def _build_entities() -> dict[str, EntityCfg]:
+    entities = {
+        "hook": _get_hook_cfg(),
+    }
+
+    for block_info in _get_block_infos():
+        entities[block_info["name"]] = _get_block_cfg(block_info)
+
+    return entities
+
+
+_ALL_BLOCK_NAMES = tuple(
+    f"b{layer}_{block}"
+    for layer in range(1, LAYERS + 1)
+    for block in range(1, BLOCKS_PER_LAYER + 1)
+)
+
+_ACTIVE_BLOCK_CFGS = {
+    name: SceneEntityCfg(name, body_names=(name,))
+    for name in _ALL_BLOCK_NAMES
+    if name not in REMOVED_BLOCKS
+}
+
+
+def all_block_pos(env: ManagerBasedRlEnv) -> torch.Tensor:
+    """
+    Critic observation: fixed 27 x 3 layout regardless of REMOVED_BLOCKS.
+
+    Existing blocks contribute their current world positions; missing blocks are
+    zeros, so the critic input dimension is stable across incompleteness patterns.
+    """
+    positions = []
+
+    for name in _ALL_BLOCK_NAMES:
+        if name in REMOVED_BLOCKS:
+            positions.append(
+                torch.zeros(
+                    (env.num_envs, 3),
+                    device=env.device,
+                    dtype=torch.float32,
+                )
+            )
+        else:
+            positions.append(target_block_pos(env, _ACTIVE_BLOCK_CFGS[name]))
+
+    return torch.cat(positions, dim=-1)
+
+
+# Observations
+
+
+#custom reward functions for the position/velocity of the target block position
+def target_block_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    asset: Entity = env.scene[asset_cfg.name]
+    position = asset.data.body_link_pos_w[:, asset_cfg.body_ids, :]
+    return position.squeeze(1)
+
+def target_block_vel(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    asset: Entity = env.scene[asset_cfg.name]
+    velocity = asset.data.body_link_vel_w[:, asset_cfg.body_ids, :]
+    return velocity.squeeze(1)
+
+
+def tower_com_shift(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    """
+    Horizontal shift of the tower CoM, EXCLUDING the per-env selected block (its
+    extraction is horizontal and must not count as tower perturbation).
+    """
+    return _push_cmd(env).selected_tower_shift()
+
+
+#convert gripper to local coordinate frame of the block
+def target_block_pose(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    """
+    extracts quaternion and position of block
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    pose = asset.data.body_link_pose_w[:, asset_cfg.body_ids, :]
+    pose = pose.squeeze(1)
+    block_pos = pose[:, :3]
+    block_quat = pose[:, 3:7]
+    return block_pos, block_quat
+
+
+def hook_tip_pos(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _HOOK_TIP_CFG) -> torch.Tensor:
+    """
+    get the position of the gripper
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    hook_tip_position = asset.data.site_pos_w[:, asset_cfg.site_ids, :]
+    return hook_tip_position.squeeze(1)
+
+
+PERTURBATION_CURRICULUM_START = 0.1
+PERTURBATION_CURRICULUM_STEPS = 100_000
+SUCCESS_CURRICULUM_START = 0.35
+SUCCESS_CURRICULUM_END = 0.75
+SUCCESS_CURRICULUM_STEPS = 100_000
+# Rewards
+#
+# NOTE: all target-block quantities read the PER-ENV randomly-selected block from the
+# JengaPushCommand term and project on that block's own extraction axis.
+def target_block_relative_movement(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG,
+) -> torch.Tensor:
+    cmd = _push_cmd(env)
+    current_rel = cmd.selected_target_pos_w() - cmd.selected_ref_pos_w()
+    return current_rel - cmd.selected_start_target_rel()
+
+
+def block_progress(env : ManagerBasedRlEnv, asset_cfg : SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    cmd = _push_cmd(env)
+    movement_rel = target_block_relative_movement(env, asset_cfg)
+    # Extraction axis is the selected block's own (world -X for even layers,
+    # world -Y for odd). Progress > 0 means the block is being pushed out.
+    progress = torch.sum(movement_rel * cmd.selected_extraction_w(), dim=-1)
+    return progress
+
+
+def tower_moderate_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_com_shift(env)
+
+
+def tower_large_perturbation(env: ManagerBasedRlEnv) -> torch.Tensor:
+    shift = tower_com_shift(env)
+    return (shift > 0.02).float()
+
+
+def perturbation_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    progress = min(env.common_step_counter / PERTURBATION_CURRICULUM_STEPS, 1.0)
+    scale = PERTURBATION_CURRICULUM_START + (
+        1.0 - PERTURBATION_CURRICULUM_START
+    ) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def success_curriculum_scale(env: ManagerBasedRlEnv) -> torch.Tensor:
+    progress = min(env.common_step_counter / SUCCESS_CURRICULUM_STEPS, 1.0)
+    scale = SUCCESS_CURRICULUM_START + (
+        SUCCESS_CURRICULUM_END - SUCCESS_CURRICULUM_START
+    ) * progress
+    return torch.tensor(scale, device=env.device)
+
+
+def success_done_distance(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return BLOCK_SIZE[1] * success_curriculum_scale(env)
+
+
+def tower_moderate_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_moderate_perturbation(env) * perturbation_curriculum_scale(env)
+
+
+def tower_large_perturbation_curriculum(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return tower_large_perturbation(env) * perturbation_curriculum_scale(env)
+
+
+def action_norm(env: ManagerBasedRlEnv) -> torch.Tensor:
+    return torch.norm(env.action_manager.action, dim=-1)
+
+
+def hook_x_position(
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg = _HOOK1_CFG,
+) -> torch.Tensor:
+    asset: Entity = env.scene[asset_cfg.name]
+    return asset.data.joint_pos[:, asset_cfg.joint_ids].squeeze(-1)
+
+
+def debug_reward_signals(env: ManagerBasedRlEnv) -> torch.Tensor:
+    if env.common_step_counter % 500 == 0:
+        action = env.action_manager.action
+        hook_asset: Entity = env.scene[_HOOK_ALL_CFG.name]
+        hook_joint_pos = hook_asset.data.joint_pos[:, _HOOK_ALL_CFG.joint_ids]
+        movement_rel = target_block_relative_movement(env)
+        print(
+            "DEBUG_REWARD",
+            f"step={env.common_step_counter}",
+            f"progress_mean={block_progress(env).mean().item():.5f}",
+            f"success_dist={success_done_distance(env).item():.5f}",
+            f"move_x={movement_rel[:, 0].mean().item():.5f}",
+            f"move_y={movement_rel[:, 1].mean().item():.5f}",
+            f"move_z={movement_rel[:, 2].mean().item():.5f}",
+            f"success_mean={success_block_reward(env).mean().item():.5f}",
+            f"tower_shift_mean={tower_com_shift(env).mean().item():.5f}",
+            f"large_mean={tower_large_perturbation(env).mean().item():.5f}",
+            f"perturb_scale={perturbation_curriculum_scale(env).item():.3f}",
+            f"action_norm_mean={action_norm(env).mean().item():.5f}",
+            f"act_x={action[:, 0].mean().item():.5f}",
+            f"act_y={action[:, 1].mean().item():.5f}",
+            f"act_z={action[:, 2].mean().item():.5f}",
+            f"act_yaw={action[:, 3].mean().item():.5f}",
+            f"hook_x_mean={hook_x_position(env).mean().item():.5f}",
+            f"joint_yaw={hook_joint_pos[:, 0].mean().item():.5f}",
+            f"joint_slide={hook_joint_pos[:, 1].mean().item():.5f}",
+            f"joint_y={hook_joint_pos[:, 2].mean().item():.5f}",
+            f"joint_z={hook_joint_pos[:, 3].mean().item():.5f}",
+            flush=True,
+        )
+    return torch.zeros(env.num_envs, device=env.device)
+
+
+class DeltaBlockProgressReward:
+    """Reward only new extraction progress since the previous environment step."""
+
+    def __init__(self, asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG):
+        self.asset_cfg = asset_cfg
+        self.previous_progress: torch.Tensor | None = None
+        self.needs_init: torch.Tensor | None = None
+
+    def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
+        current_progress = block_progress(env, self.asset_cfg)
+
+        if self.previous_progress is None:
+            self.previous_progress = current_progress.clone()
+            self.needs_init = torch.zeros_like(current_progress, dtype=torch.bool)
+            return torch.zeros_like(current_progress)
+
+        if self.needs_init is not None and torch.any(self.needs_init):
+            self.previous_progress[self.needs_init] = current_progress[self.needs_init]
+            self.needs_init[self.needs_init] = False
+
+        delta_progress = current_progress - self.previous_progress
+        self.previous_progress = current_progress.clone()
+
+        return torch.clamp(delta_progress, min=0.0)
+
+    def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+        if self.previous_progress is None:
+            return
+
+        if self.needs_init is None:
+            self.needs_init = torch.zeros_like(self.previous_progress, dtype=torch.bool)
+
+        if env_ids is None:
+            env_ids = slice(None)
+        self.needs_init[env_ids] = True
+
+
+
+def get_block_ref_pos(env : ManagerBasedRlEnv) -> torch.Tensor:
+    # Drift reference = mean of the selected block's present same-layer neighbours.
+    return _push_cmd(env).selected_ref_pos_w()
+
+def success_block_extract(env : ManagerBasedRlEnv) -> torch.Tensor:
+    progress = block_progress(env)
+    return progress > success_done_distance(env)
+
+
+def success_block_reward(env : ManagerBasedRlEnv) -> torch.Tensor:
+    return success_block_extract(env).float()
+
+
+def tower_damage(env : ManagerBasedRlEnv) -> torch.Tensor:
+    # (Not wired into terminations by default.) Tower considered damaged if the CoM
+    # of the non-target blocks shifts too far horizontally.
+    return _push_cmd(env).selected_tower_shift() > 0.06
+
+
+
+
+
+# =====================================================================================
+# Random block selection: JengaPushCommand (incomplete-tower aware)
+# =====================================================================================
+#
+# Each episode the env randomly picks a target block among SELECTABLE ones, teleports
+# the hook in front of it (yaw home 0deg for even / 90deg for odd layers), and the
+# policy learns to push THAT block out. Everything downstream reads the selection from
+# this command term.
+
+# Selectable blocks. "all" would allow every present block, but auto_search.py
+# (block_logs.txt) showed that center blocks pinned under load are STUCK/UNSAFE in the
+# complete tower, and in THIS incomplete tower layers 4 and 5 are already down to
+# 1-2 blocks — extracting from them collapses the tower. So the default is the SAFE
+# extractable set from auto_search minus removed blocks and minus layers 4/5.
+_SELECT_MODE: str | tuple[str, ...] = (
+    "b1_1", "b1_3",
+    "b2_1", "b2_2", "b2_3",
+    "b3_1",
+    "b6_1", "b6_3",
+    "b7_1", "b7_3",
+    "b9_1", "b9_2", "b9_3",
+)
+
+_HOOK_BASE_POS = (0.15, 0.05, 0.16)   # must match _get_hook_cfg init_state.pos
+_TIP_LOCAL_X = -0.056                  # hook_tip site x offset (points along local -X)
+_APPROACH_GAP = 0.02                   # tip standoff in front of the push face (m)
+_LONG_HALF = BLOCK_SIZE[1] / 2         # 0.075, half the block's long dimension
+
+
+def _rz_quat(angle_rad: float) -> tuple[float, float, float, float]:
+    return (math.cos(angle_rad / 2), 0.0, 0.0, math.sin(angle_rad / 2))
+
+
+def _block_table():
+    """Ordered (index == _get_block_infos order, PRESENT blocks only) per-block data
+    used for selection, hook placement, and the task frame."""
+    infos = _get_block_infos()
+    names = [b["name"] for b in infos]
+    entries = []
+    for b in infos:
+        cx, cy, cz = b["pos"]
+        layer = int(b["name"][1:].split("_")[0])
+        even = (layer % 2 == 0)
+        tip_off = -_TIP_LOCAL_X  # 0.056, distance from body origin to tip along push
+        if even:
+            # yaw home 0: slides act along world axes. Approach from +X, push -X.
+            yaw = 0.0
+            extraction_w = (-1.0, 0.0, 0.0)
+            sx = cx + _LONG_HALF + _APPROACH_GAP + tip_off - _HOOK_BASE_POS[0]
+            sy = cy - _HOOK_BASE_POS[1]
+            sz = cz - _HOOK_BASE_POS[2]
+            task_quat = _rz_quat(math.pi)          # world +X -> extraction (-X)
+        else:
+            # yaw home 90deg: in the yawed frame hook_slide pushes world -Y.
+            # body_origin = (base_x - sy, base_y + sx, base_z + sz). Approach +Y, push -Y.
+            yaw = math.pi / 2
+            extraction_w = (0.0, -1.0, 0.0)
+            sx = cy + _LONG_HALF + _APPROACH_GAP + tip_off - _HOOK_BASE_POS[1]
+            sy = _HOOK_BASE_POS[0] - cx
+            sz = cz - _HOOK_BASE_POS[2]
+            task_quat = _rz_quat(-math.pi / 2)     # world +X -> extraction (-Y)
+        entries.append({
+            "name": b["name"], "layer": layer, "even": even,
+            "start_pos": (cx, cy, cz),
+            "extraction_w": extraction_w,
+            "task_quat": task_quat,
+            "hook_target": (yaw, sx, sy, sz),      # order: yaw, slide, slide_y, slide_z
+        })
+    # neighbours = other PRESENT blocks in the same layer (drift reference). In an
+    # incomplete tower this list is ragged: 2, 1 or 0 entries per block.
+    by_layer: dict[int, list[int]] = {}
+    for i, e in enumerate(entries):
+        by_layer.setdefault(e["layer"], []).append(i)
+    for i, e in enumerate(entries):
+        e["neighbors"] = [j for j in by_layer[e["layer"]] if j != i]
+    return names, entries
+
+
+def _selectable_indices() -> tuple[int, ...]:
+    _, entries = _block_table()
+    if isinstance(_SELECT_MODE, (list, tuple)):
+        want = set(_SELECT_MODE)
+        missing = want & REMOVED_BLOCKS
+        if missing:
+            raise ValueError(f"Selectable blocks are removed from the tower: {missing}")
+        return tuple(i for i, e in enumerate(entries) if e["name"] in want)
+    if _SELECT_MODE == "all":
+        return tuple(range(len(entries)))
+    return tuple(i for i, e in enumerate(entries) if e["even"])  # default even
+
+
+_SELECTABLE_GLOBAL = _selectable_indices()
+
+
+class JengaPushCommand(CommandTerm):
+    """Randomly selects one present tower block per env at reset and teleports the
+    hook in front of it. Exposes cached per-env geometry (target/ref pose, extraction
+    axis, task-frame quat) consumed by observations and rewards."""
+
+    cfg: "JengaPushCommandCfg"
+
+    def __init__(self, cfg: "JengaPushCommandCfg", env: ManagerBasedRlEnv):
+        super().__init__(cfg, env)
+        names, entries = _block_table()
+        dev = self.device
+        self._all_names = names
+        self._blocks = [env.scene[n] for n in names]
+        self._n_all = len(names)
+
+        self._start_pos = torch.tensor([e["start_pos"] for e in entries],
+                                       dtype=torch.float32, device=dev)          # [P,3]
+        self._extraction = torch.tensor([e["extraction_w"] for e in entries],
+                                        dtype=torch.float32, device=dev)         # [P,3]
+        self._task_quat = torch.tensor([e["task_quat"] for e in entries],
+                                       dtype=torch.float32, device=dev)          # [P,4]
+        self._hook_target = torch.tensor([e["hook_target"] for e in entries],
+                                         dtype=torch.float32, device=dev)        # [P,4]
+
+        # Ragged same-layer neighbour lists, padded to 2 with a validity mask.
+        # Padded slots index 0 (any valid row) and are masked out of the mean.
+        self._neighbor_idx = torch.tensor(
+            [(e["neighbors"] + [0, 0])[:2] for e in entries],
+            dtype=torch.long, device=dev)                                        # [P,2]
+        self._neighbor_mask = torch.tensor(
+            [([1.0] * len(e["neighbors"]) + [0.0, 0.0])[:2] for e in entries],
+            dtype=torch.float32, device=dev)                                     # [P,2]
+
+        neigh_start = self._start_pos[self._neighbor_idx]                        # [P,2,3]
+        self._start_ref = self._masked_neighbor_mean(
+            neigh_start, self._neighbor_mask)                                    # [P,3]
+        self._start_target_rel = self._start_pos - self._start_ref               # [P,3]
+        total_start = self._start_pos.sum(dim=0)                                 # [3]
+        self._ref_com_excl = (total_start - self._start_pos) / (self._n_all - 1) # [P,3]
+
+        self._selectable = torch.tensor(cfg.selectable_global_idx,
+                                        dtype=torch.long, device=dev)            # [K]
+        self._num_selectable = int(self._selectable.numel())
+
+        hook = env.scene["hook"]
+        jids, _ = hook.find_joints(
+            ["hook_yaw", "hook_slide", "hook_slide_y", "hook_slide_z"],
+            preserve_order=True,
+        )
+        self._hook = hook
+        self._hook_jids = torch.tensor(jids, dtype=torch.long, device=dev)
+
+        self.block_selection = torch.zeros(self.num_envs, dtype=torch.long, device=dev)
+        self._env_arange = torch.arange(self.num_envs, device=dev)
+
+        self._cur_target_pos = torch.zeros(self.num_envs, 3, device=dev)
+        self._cur_target_vel = torch.zeros(self.num_envs, 3, device=dev)
+        self._cur_ref_pos = torch.zeros(self.num_envs, 3, device=dev)
+        self._cur_tower_shift = torch.zeros(self.num_envs, device=dev)
+
+        self.metrics["selected_block"] = torch.zeros(self.num_envs, device=dev)
+        self.metrics["progress"] = torch.zeros(self.num_envs, device=dev)
+
+    @staticmethod
+    def _masked_neighbor_mean(neigh: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Mean over valid neighbours; rows with zero neighbours fall back to a
+        world-fixed reference at the origin (no drift correction)."""
+        m = mask.unsqueeze(-1)                                   # [...,2,1]
+        count = m.sum(dim=-2)                                    # [...,1]
+        mean = (neigh * m).sum(dim=-2) / count.clamp(min=1e-6)
+        return torch.where(count > 0, mean, torch.zeros_like(mean))
+
+    @property
+    def _global_sel(self) -> torch.Tensor:
+        return self._selectable[self.block_selection]           # [num_envs]
+
+    @property
+    def command(self) -> torch.Tensor:
+        return self.selected_extraction_w()
+
+    # cached accessors (valid after each _update_metrics, which runs before rewards)
+    def selected_target_pos_w(self) -> torch.Tensor: return self._cur_target_pos
+    def selected_target_vel_w(self) -> torch.Tensor: return self._cur_target_vel
+    def selected_ref_pos_w(self) -> torch.Tensor: return self._cur_ref_pos
+    def selected_tower_shift(self) -> torch.Tensor: return self._cur_tower_shift
+    def selected_extraction_w(self) -> torch.Tensor: return self._extraction[self._global_sel]
+    def selected_task_quat_w(self) -> torch.Tensor: return self._task_quat[self._global_sel]
+    def selected_start_target_rel(self) -> torch.Tensor: return self._start_target_rel[self._global_sel]
+
+    def _update_metrics(self) -> None:
+        all_pos = torch.stack([b.data.root_link_pos_w for b in self._blocks], dim=0)  # [P,N,3]
+        all_vel = torch.stack([b.data.root_link_lin_vel_w for b in self._blocks], dim=0)
+        g = self._global_sel                                                          # [N]
+        self._cur_target_pos = all_pos[g, self._env_arange]                           # [N,3]
+        self._cur_target_vel = all_vel[g, self._env_arange]
+        nidx = self._neighbor_idx[g]                                                  # [N,2]
+        neigh = all_pos[nidx, self._env_arange.unsqueeze(1)]                          # [N,2,3]
+        self._cur_ref_pos = self._masked_neighbor_mean(neigh, self._neighbor_mask[g])
+        com_excl = (all_pos.sum(dim=0) - self._cur_target_pos) / (self._n_all - 1)    # [N,3]
+        self._cur_tower_shift = torch.norm((com_excl - self._ref_com_excl[g])[:, :2], dim=-1)
+
+        self.metrics["selected_block"] = g.float()
+        movement_rel = (self._cur_target_pos - self._cur_ref_pos) - self.selected_start_target_rel()
+        self.metrics["progress"] = torch.sum(movement_rel * self.selected_extraction_w(), dim=-1)
+
+    def _resample_command(self, env_ids: torch.Tensor) -> None:
+        n = len(env_ids)
+        self.block_selection[env_ids] = torch.randint(
+            0, self._num_selectable, (n,), device=self.device)
+        g = self._selectable[self.block_selection[env_ids]]        # [n]
+        target = self._hook_target[g].clone()                      # [n,4] (yaw,sx,sy,sz)
+        # tiny exploration jitter on the frozen dofs (slides + yaw)
+        target[:, 1:] += sample_uniform(-0.002, 0.002, (n, 3), device=self.device)
+        target[:, 0] += sample_uniform(-0.02, 0.02, (n,), device=self.device)
+        self._hook.write_joint_position_to_sim(
+            target, joint_ids=self._hook_jids, env_ids=env_ids)
+        self._hook.write_joint_velocity_to_sim(
+            torch.zeros(n, self._hook_jids.numel(), device=self.device),
+            joint_ids=self._hook_jids, env_ids=env_ids)
+
+    def _update_command(self) -> None:
+        pass
+
+
+@dataclass(kw_only=True)
+class JengaPushCommandCfg(CommandTermCfg):
+    selectable_global_idx: tuple[int, ...] = ()
+
+    def build(self, env: ManagerBasedRlEnv) -> JengaPushCommand:
+        return JengaPushCommand(self, env)
+
+
+def _push_cmd(env: ManagerBasedRlEnv) -> JengaPushCommand:
+    return env.command_manager.get_term("push")
+
+
+# ---- Block-relative (task-frame) observations ----
+# Task frame: +X_task == extraction direction, so every block looks identical.
+
+def tip_in_task_frame(env: ManagerBasedRlEnv,
+                      asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    cmd = _push_cmd(env)
+    rel = hook_tip_pos(env) - cmd.selected_target_pos_w()
+    return quat_apply_inverse(cmd.selected_task_quat_w(), rel)
+
+
+def block_offset_in_task_frame(env: ManagerBasedRlEnv,
+                               asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    # block displacement from its start (drift-corrected), in the task frame.
+    cmd = _push_cmd(env)
+    movement_rel = target_block_relative_movement(env)
+    return quat_apply_inverse(cmd.selected_task_quat_w(), movement_rel)
+
+
+def block_vel_in_task_frame(env: ManagerBasedRlEnv,
+                            asset_cfg: SceneEntityCfg = _TARGET_BLOCK_CFG) -> torch.Tensor:
+    cmd = _push_cmd(env)
+    return quat_apply_inverse(cmd.selected_task_quat_w(), cmd.selected_target_vel_w())
+
+
+# Environment conifg
+
+
+def _make_env_cfg() -> ManagerBasedRlEnvCfg:
+#observations actor + critic
+    # Actor observations are all in the block's TASK FRAME (extraction == +X_task), so
+    # the push task looks identical regardless of which block was chosen / where it is.
+    actor_terms = {
+        "pusher_pos": ObservationTermCfg(
+            func=joint_pos_rel,
+            params={"asset_cfg": _HOOK_ALL_CFG}
+        ),
+        "pusher_vel": ObservationTermCfg(
+            func=joint_vel_rel,
+            params={"asset_cfg": _HOOK_ALL_CFG}
+        ),
+        "tip_in_block": ObservationTermCfg(
+            func=tip_in_task_frame,
+        ),
+        "block_offset": ObservationTermCfg(
+            func=block_offset_in_task_frame,
+        ),
+        "block_vel": ObservationTermCfg(
+            func=block_vel_in_task_frame,
+        ),
+    }
+
+    critic_terms = {
+        **actor_terms,
+        "block_all_pos": ObservationTermCfg(
+            func=all_block_pos,
+        ),
+    }
+
+
+    observations = {
+        "actor": ObservationGroupCfg(actor_terms, enable_corruption=True),
+        "critic": ObservationGroupCfg(critic_terms),
+    }
+
+
+    actions : dict[str, ActionTermCfg] = {
+        "x_velocity": JointVelocityActionCfg(
+            entity_name="hook",
+            actuator_names=("hook_slide",),
+            scale=0.03,
+            clip={"hook_slide": (-0.6, 0.6)},
+        ),
+        "touch_y": RelativeJointPositionActionCfg(
+            entity_name="hook",
+            actuator_names=("hook_slide_y",),
+            scale=0.000,
+        ),
+        "touch_z": RelativeJointPositionActionCfg(
+            entity_name="hook",
+            actuator_names=("hook_slide_z",),
+            scale=0.000,
+        ),
+        "yaw" : RelativeJointPositionActionCfg(
+            entity_name="hook",
+            actuator_names=("hook_yaw",),
+            scale=0.00,
+        ),
+    }
+
+
+    # No hook-reset events: JengaPushCommand._resample_command owns the hook reset
+    # (it teleports the hook in front of the randomly-chosen block). It runs after the
+    # scene reset-to-default, so it wins.
+    events: dict[str, EventTermCfg] = {}
+
+    commands = {
+        "push": JengaPushCommandCfg(
+            # >> episode length so the block/hook is chosen only at reset, never mid-episode.
+            resampling_time_range=(1.0e9, 1.0e9),
+            selectable_global_idx=_SELECTABLE_GLOBAL,
+        ),
+    }
+
+
+    rewards = {
+        "delta_block_progress": RewardTermCfg(
+            func=DeltaBlockProgressReward(),
+            weight=40.0,
+        ),
+        "successful_extract": RewardTermCfg(
+            func=success_block_reward,
+            weight=900.0,
+        ),
+        "tower_moderate_pertub" : RewardTermCfg(
+            func=tower_moderate_perturbation_curriculum,
+            weight=-0.2
+        ),
+        "tower_large_pertub" : RewardTermCfg(
+            func=tower_large_perturbation_curriculum,
+            weight=-100.0
+        ),
+        "debug_reward_signals": RewardTermCfg(
+            func=debug_reward_signals,
+            weight=1e-12,
+        ),
+    }
+
+    metrics = {
+        "block_progress_last": MetricsTermCfg(
+            func=block_progress,
+            reduce="last",
+        ),
+        "delta_block_progress_mean": MetricsTermCfg(
+            func=DeltaBlockProgressReward(),
+            reduce="mean",
+        ),
+        "success_last": MetricsTermCfg(
+            func=success_block_reward,
+            reduce="last",
+        ),
+        "tower_com_shift_last": MetricsTermCfg(
+            func=tower_com_shift,
+            reduce="last",
+        ),
+        "tower_large_perturb_mean": MetricsTermCfg(
+            func=tower_large_perturbation,
+            reduce="mean",
+        ),
+        "action_norm_mean": MetricsTermCfg(
+            func=action_norm,
+            reduce="mean",
+        ),
+        "hook_x_position_last": MetricsTermCfg(
+            func=hook_x_position,
+            params={"asset_cfg": _HOOK1_CFG},
+            reduce="last",
+        ),
+    }
+
+    terminations = {
+        "success": TerminationTermCfg(func=success_block_extract),
+        #"tower_damage": TerminationTermCfg(func=tower_damage),
+        "time_out": TerminationTermCfg(func=time_out, time_out=True),
+    }
+
+
+    return ManagerBasedRlEnvCfg(
+        scene=SceneCfg(
+            terrain=TerrainEntityCfg(terrain_type="plane"),
+            entities=_build_entities(),
+            num_envs=256,
+            env_spacing=4.0,
+        ),
+        observations=observations,
+        actions=actions,
+        events=events,
+        commands=commands,
+        rewards=rewards,
+        metrics=metrics,
+        terminations=terminations,
+        viewer=ViewerConfig(
+            origin_type=ViewerConfig.OriginType.WORLD,
+            distance=1.0,
+            elevation=-20.0,
+            azimuth=45.0,
+        ),
+        sim=SimulationCfg(
+            nconmax=4096,
+            njmax=4096,
+            mujoco=MujocoCfg(timestep=0.002),
+        ),
+        decimation=5,
+        episode_length_s=20.0,
+    )
+
+
+
+def jenga_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+    cfg = _make_env_cfg()
+
+    if play:
+        cfg.episode_length_s = 1e10
+        cfg.observations["actor"].enable_corruption = False
+
+    return cfg
+
+
+
+def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  return RslRlOnPolicyRunnerCfg(
+    actor=RslRlModelCfg(
+      hidden_dims=(64, 64),
+      activation="elu",
+      obs_normalization=False,
+      distribution_cfg={
+        "class_name": "GaussianDistribution",
+        "init_std": 1.0,
+        "std_type": "scalar",
+      },
+    ),
+    critic=RslRlModelCfg(
+      hidden_dims=(64, 64),
+      activation="elu",
+      obs_normalization=False,
+    ),
+    algorithm=RslRlPpoAlgorithmCfg(
+      value_loss_coef=1.0,
+      use_clipped_value_loss=True,
+      clip_param=0.2,
+      entropy_coef=0.01,
+      num_learning_epochs=5,
+      num_mini_batches=4,
+      learning_rate=1.0e-3,
+      schedule="adaptive",
+      gamma=0.99,
+      lam=0.95,
+      desired_kl=0.01,
+      max_grad_norm=1.0,
+    ),
+    experiment_name="jenga_incomplete_randblock",
+    save_interval=500,
+    num_steps_per_env=32,
+    max_iterations=2000,
+  )
+
+
+
+
+if __name__ == "__main__":
+    entities = _build_entities()
+    print(entities.keys())
+    print(len(entities))
