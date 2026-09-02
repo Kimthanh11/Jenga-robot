@@ -911,6 +911,17 @@ def _make_env_cfg() -> ManagerBasedRlEnvCfg:
             func=tower_large_perturbation_curriculum,
             weight=-100.0
         ),
+        # No action-effort penalty existed anywhere in this reward set. Combined with
+        # entropy_coef>0 (a positive drive toward HIGHER std) and nothing pushing back,
+        # action std grew unboundedly across every 1536-env run (7->33+) until physics
+        # produced NaN observations. See distribution_cfg below for the primary fix
+        # (learn_std=False) -- this is a secondary smoothing term, not load-bearing on
+        # its own (2026-08-27, corroborated by borisbranch hitting the same failure
+        # independently: std of 117 and 743 observed there).
+        "action_rate": RewardTermCfg(
+            func=action_rate_l2,
+            weight=-0.01,
+        ),
         "debug_reward_signals": RewardTermCfg(
             func=debug_reward_signals,
             weight=1e-12,
@@ -1015,10 +1026,22 @@ def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       hidden_dims=(64, 64),
       activation="elu",
       obs_normalization=False,
+      # std is FIXED, not learned (learn_std=False). rsl_rl's GaussianDistribution
+      # clamps std with torch.clamp, whose gradient is zero outside std_range -- so
+      # bounding the range alone is NOT a fix, it's a one-way trap: once the entropy
+      # bonus (entropy_coef>0 above) pushes log_std_param past the upper bound, no
+      # gradient can ever bring it back down, and PPO keeps scoring log-probs of
+      # samples that all clip to the same boundary action. Every 1536-env run here hit
+      # this (std 7->33+ before NaN); borisbranch hit it independently and harder
+      # (std 117 and 743) and found the same thing -- see its commit 47caca0. 0.2 is
+      # what a healthy run's std settles near before an unconstrained entropy term
+      # takes over (2026-08-27).
       distribution_cfg={
         "class_name": "GaussianDistribution",
-        "init_std": 1.0,
-        "std_type": "scalar",
+        "init_std": 0.2,
+        "std_type": "log",
+        "std_range": (0.05, 1.0),
+        "learn_std": False,
       },
     ),
     critic=RslRlModelCfg(
