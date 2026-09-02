@@ -41,6 +41,17 @@ sbatch evaluate_low_level.sbatch \
 Run `trained-legal` with the same arguments to measure the generalization gap. Missing
 levels `1`, `2`, and `3` test robustness separately from target generalization.
 
+Large target sets with many timeouts can exceed one job's wall-time. Evaluate one
+target per array task while retaining the `heldout-legal` label:
+
+```bash
+P_HELD=$(sbatch --array=0-19%2 evaluate_low_level_array.sbatch \
+  logs/rsl_rl/jenga/<run>/model_<iteration>.pt heldout-legal | awk '{print $4}')
+```
+
+The twenty episode files are named `eval-<array-job>_<task>-episodes.csv` and can be
+passed to the analyzer with one shell glob.
+
 ## Scripted controls
 
 ```bash
@@ -83,7 +94,7 @@ Combine episode CSVs from matching policy and baseline jobs:
 ```bash
 ./.venv/bin/python analyze_evaluation.py \
   logs/eval/eval-<policy-trained-job>-episodes.csv \
-  logs/eval/eval-<policy-heldout-job>-episodes.csv \
+  logs/eval/eval-<policy-heldout-array-job>_*-episodes.csv \
   logs/eval/baseline-<trained-array-job>_*-episodes.csv \
   logs/eval/baseline-<heldout-array-job>_*-episodes.csv
 ```

@@ -376,6 +376,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--targets", default="trained")
+    parser.add_argument(
+        "--target-index",
+        type=int,
+        help="Evaluate only this zero-based member of the resolved target set while "
+        "retaining the set label. Used by target-sharded SLURM evaluations.",
+    )
     parser.add_argument("--missing-levels", type=int, nargs="+", default=[0, 1, 2, 3])
     parser.add_argument(
         "--episodes",
@@ -431,10 +437,17 @@ def main() -> None:
         seeds = parse_int_csv(args.seeds)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.target_index is not None:
+        if args.target_index < 0 or args.target_index >= len(targets):
+            parser.error(
+                f"target-index {args.target_index} is outside {target_set} "
+                f"with {len(targets)} targets"
+            )
+        targets = (targets[args.target_index],)
 
     summary_path = args.summary_csv or args.csv
     print(
-        f"targets={target_set} ({len(targets)}) seeds={seeds} "
+        f"targets={target_set} selected={targets} seeds={seeds} "
         f"episodes_per_seed={args.episodes_per_seed} max_steps={args.max_steps} "
         f"yaw={'frozen' if args.freeze_yaw else 'configured'}",
         flush=True,
