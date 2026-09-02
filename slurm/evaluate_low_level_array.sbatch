@@ -2,7 +2,7 @@
 # Evaluate one target per array task while keeping the named target-set label.
 #
 # Usage:
-#   sbatch --array=0-19%2 evaluate_low_level_array.sbatch \
+#   sbatch --array=0-19%2 slurm/evaluate_low_level_array.sbatch \
 #     logs/rsl_rl/jenga/<run>/model_8500.pt heldout-legal
 
 #SBATCH --job-name=jenga_eval
@@ -34,7 +34,7 @@ mkdir -p logs/slurm logs/eval
 EPISODES_OUT="logs/eval/eval-${RESULT_ID}-episodes.csv"
 SUMMARY_OUT="logs/eval/eval-${RESULT_ID}-summary.csv"
 
-CMD=(./.venv/bin/python evaluate_low_level.py
+CMD=(./.venv/bin/python -m scripts.evaluate_low_level
   --checkpoint "${CHECKPOINT}"
   --targets "${TARGETS}"
   --target-index "${TARGET_INDEX}"

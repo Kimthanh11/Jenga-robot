@@ -1,28 +1,4 @@
-"""Open-loop extraction test for a single Jenga target block.
-
-Drives the hook with a constant push command and runs until the episode terminates,
-reporting which terminal condition was reached. This serves as a feasibility oracle:
-a block that a straight scripted push cannot extract is unlikely to be a viable
-reinforcement learning target, and establishing that costs seconds rather than GPU
-hours.
-
-Terminal conditions, reported as `reason`:
-
-    success     the target reached the success distance with the tower stable
-    damage      a non-target block exceeded a tower_damage threshold
-    stalled     no significant progress for STALL_PATIENCE steps
-    step_cap    the hard step limit was reached without a terminal condition
-
-The distinction between `stalled` and `step_cap` matters: without it, "the block is
-stuck" cannot be told apart from "the test budget was too small". Extraction requires
-112.5 mm of travel, which at 100 Hz and 0.03 m/s is 375 contact steps plus roughly 73
-steps to close the 20 mm approach gap. Targets with high slip need considerably more,
-so a fixed budget is not a valid test.
-
-Both the actuator force on hook_slide and the contact sensor force are recorded. The
-two separate an actuator saturated at its stall force from a tip that is losing
-contact; the contact force alone cannot distinguish them.
-"""
+"""Run an open-loop extraction test for one target block."""
 
 from __future__ import annotations
 
@@ -50,9 +26,7 @@ def _configure_debug_stage(cfg, friction: float | None, lock_yaw: bool) -> None:
     cfg.YAW_CURRICULUM_START = 0.0
     cfg.YAW_CURRICULUM_END = 0.0
     if lock_yaw:
-        # CurriculumYawAction sets target = MEASURED position + delta, so with delta 0
-        # the servo error is always zero and the joint free-wheels under contact load.
-        # Collapsing the clamp window pins the target to the per-env home yaw instead.
+        # A zero-width clamp pins yaw to the target-specific home pose.
         cfg.YAW_TARGET_LIMIT = 0.0
     if friction is not None:
         cfg.RESET_FRICTION_SLIDING_RANGE = (friction, friction)
@@ -193,9 +167,7 @@ def main() -> None:
                 touch = env.action_manager.get_term("block_local_touch")
                 target_yz = touch._processed_targets[0]
                 tip_block = cfg.hook_tip_pos_in_block_frame(env)[0]
-                # block_progress is drift-corrected against the same-layer neighbours.
-                # Log the raw displacement too, so "block did not move" can be told
-                # apart from "block and its reference moved together".
+                # Keep raw displacement separate from drift-corrected progress.
                 cmd = env.command_manager.get_term("target_block")
                 extraction = cmd.selected_extraction_w()[0]
                 target_w = cmd.selected_target_pos_w()[0]
@@ -231,10 +203,7 @@ def main() -> None:
                     flush=True,
                 )
 
-            # Two separate quantities: `best_progress` is the true maximum, while
-            # `stall_ref` is the level of the last SIGNIFICANT improvement. Folding them
-            # into one lets sub-epsilon creep raise the bar every step, so the epsilon
-            # never triggers and the stall fires on schedule regardless of motion.
+            # Stall progress advances only after a significant improvement.
             if progress > stall_ref + args.stall_eps:
                 stall_ref = progress
                 best_step = step

@@ -1,21 +1,4 @@
-"""Rewrite the action standard deviation stored in an rsl_rl checkpoint.
-
-rsl_rl constrains the policy standard deviation with torch.clamp, whose gradient is
-zero outside the permitted range. Once the entropy bonus drives log_std_param past the
-upper bound, the parameter cannot recover: no gradient returns it to the interior, a
-substantial fraction of sampled actions is clipped by clip_actions, and PPO continues
-to evaluate log-probabilities on the unclipped samples.
-
-Setting learn_std=False does not repair this on resume. The configured init_std applies
-only when the distribution is constructed; load_state_dict then overwrites it with the
-value stored in the checkpoint, and requires_grad=False pins it there permanently.
-
-This script rewrites that single parameter so training can continue from an otherwise
-healthy policy. The mean network and the optimizer state are left untouched.
-
-Verify the effect in the training log: `Mean action std` must report the new value from
-the first iteration onwards.
-"""
+"""Rewrite the action standard deviation stored in an rsl_rl checkpoint."""
 
 from __future__ import annotations
 

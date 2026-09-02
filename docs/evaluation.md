@@ -33,7 +33,7 @@ checkpoint trained with yaw enabled.
 ## Policy evaluation
 
 ```bash
-sbatch evaluate_low_level.sbatch \
+sbatch slurm/evaluate_low_level.sbatch \
   logs/rsl_rl/jenga/<run>/model_<iteration>.pt \
   heldout-legal 0 50 50 "" "" "" freeze "" 1,2,3,4,5 2000
 ```
@@ -45,7 +45,7 @@ Large target sets with many timeouts can exceed one job's wall-time. Evaluate on
 target per array task while retaining the `heldout-legal` label:
 
 ```bash
-P_HELD=$(sbatch --array=0-19%2 evaluate_low_level_array.sbatch \
+P_HELD=$(sbatch --array=0-19%2 slurm/evaluate_low_level_array.sbatch \
   logs/rsl_rl/jenga/<run>/model_<iteration>.pt heldout-legal | awk '{print $4}')
 ```
 
@@ -55,7 +55,7 @@ passed to the analyzer with one shell glob.
 ## Scripted controls
 
 ```bash
-sbatch evaluate_scripted_baselines.sbatch \
+sbatch slurm/evaluate_scripted_baselines.sbatch \
   heldout-legal 0 settle,straight,pulsed,tap 50 50 1,2,3,4,5 2000 \
   20 10 5 0.0 0.0
 ```
@@ -77,9 +77,9 @@ The complete four-controller, five-seed protocol is too long for one cluster job
 Run each controller/seed combination as a bounded array task instead:
 
 ```bash
-B_TRAIN=$(sbatch --array=0-19%2 evaluate_scripted_baselines.sbatch \
+B_TRAIN=$(sbatch --array=0-19%2 slurm/evaluate_scripted_baselines.sbatch \
   trained-legal 0 protocol-array | awk '{print $4}')
-B_HELD=$(sbatch --array=0-19%2 evaluate_scripted_baselines.sbatch \
+B_HELD=$(sbatch --array=0-19%2 slurm/evaluate_scripted_baselines.sbatch \
   heldout-legal 0 protocol-array | awk '{print $4}')
 ```
 
@@ -92,7 +92,7 @@ monolithic jobs with these complete runs because they contain duplicate scenario
 Combine episode CSVs from matching policy and baseline jobs:
 
 ```bash
-./.venv/bin/python analyze_evaluation.py \
+./.venv/bin/python -m scripts.analyze_evaluation \
   logs/eval/eval-<policy-trained-job>-episodes.csv \
   logs/eval/eval-<policy-heldout-array-job>_*-episodes.csv \
   logs/eval/baseline-<trained-array-job>_*-episodes.csv \

@@ -11,10 +11,7 @@ register_mjlab_task(
 )
 
 
-# Timur integration: incomplete tower + random target block.
-#
-# Keep this as a separate task so the stable fixed-block Mjlab-Jenga checkpoints
-# keep their exact environment/action semantics.
+# Legacy incomplete-tower tasks retain their original checkpoint semantics.
 from mjlab_jenga import jenga_incomplete_random_cfg as _incomplete_random  # noqa: E402
 
 register_mjlab_task(
@@ -25,8 +22,6 @@ register_mjlab_task(
 )
 
 
-# V2 adds Timur's task-frame/home-relative touch and yaw actions on top of the
-# random-block command.
 from mjlab_jenga import jenga_incomplete_random_v2_cfg as _incomplete_random_v2  # noqa: E402
 
 register_mjlab_task(

@@ -2,8 +2,8 @@
 # Train an explicit Jenga low-level stage.
 #
 # Usage:
-#   sbatch train_low_level_stage.sbatch full 20000 768
-#   sbatch train_low_level_stage.sbatch missing1 10000 768 <target_run> model_9999.pt
+#   sbatch slurm/train_low_level_stage.sbatch full 20000 768
+#   sbatch slurm/train_low_level_stage.sbatch missing1 10000 768 <target_run> model_9999.pt
 
 #SBATCH --job-name=jenga_low
 #SBATCH -p stud
@@ -54,7 +54,7 @@ export WANDB_MODE=disabled
 export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
-CMD=(./.venv/bin/python train_low_level_stage.py "${STAGE}" --iterations "${ITERS}" --num-envs "${NUM_ENVS}")
+CMD=(./.venv/bin/python -m scripts.train_low_level_stage "${STAGE}" --iterations "${ITERS}" --num-envs "${NUM_ENVS}")
 if [ -n "${ENTROPY}" ]; then CMD+=(--entropy-coef "${ENTROPY}"); fi
 if [ -n "${CURSTEPS}" ]; then CMD+=(--success-curriculum-steps "${CURSTEPS}"); fi
 if [ -n "${SUFFIX}" ]; then CMD+=(--run-suffix "${SUFFIX}"); fi
@@ -67,8 +67,5 @@ if [ -n "${LOAD_RUN}" ]; then
   CMD+=(--load-run "${LOAD_RUN}" --load-checkpoint "${CHECKPOINT}")
 fi
 
-# Echo the resolved command line: the startup banner lists only some of the options,
-# which made it impossible to tell from a log whether a run actually had the flags
-# it was launched with.
 echo "cmd:        ${CMD[*]}"
 PYTHONUNBUFFERED=1 "${CMD[@]}"

@@ -1,10 +1,4 @@
-"""Evaluate simple Jenga controllers under the policy evaluation protocol.
-
-The main comparison uses the same targets, reset seeds, exact missing-block patterns,
-episode horizon, contact point and stability criteria as ``evaluate_low_level.py``.
-``straight`` and ``settle`` are open loop. ``pulsed`` and ``tap`` only use a binary
-contact trigger; they are deliberately simple heuristics rather than learned policies.
-"""
+"""Evaluate scripted controllers under the policy evaluation protocol."""
 
 from __future__ import annotations
 

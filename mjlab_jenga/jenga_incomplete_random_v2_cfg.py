@@ -1,28 +1,6 @@
-from __future__ import annotations
+"""Incomplete-tower task with home-relative contact and yaw actions."""
 
-# =====================================================================================
-# V2 of the incomplete-tower + random-block task: unfreeze the touch (y/z) and yaw
-# DOFs with Boris's curriculum approach (borisbranch e673d6d/fb4ec9a), adapted to the
-# random-block setup.
-#
-# Differences vs Boris's original (which was hardcoded to b6_1 with a world-aligned
-# hook):
-#   * Contact targets are HOME-RELATIVE: JengaPushCommand teleports the hook so the
-#     tip faces the selected block's push-face center; the touch action offsets the
-#     slide_y/slide_z targets around that per-env home pose. Because the hook is yawed
-#     into the block's task frame, slide_y is always the lateral axis of the push face
-#     and slide_z the vertical one — no world-frame conversion needed.
-#   * Contact limits are the actual push-face half-extents (lateral ±0.025 = half
-#     block width, vertical ±0.015 = half block height), not ±half-length.
-#   * Yaw target is clamped around the per-env HOME yaw (0 for even layers, 90deg for
-#     odd), not around 0.
-#   * Same 4-dim action space and identical actor observations as v1, so v1
-#     checkpoints can warm-start v2 and vice versa.
-#
-# Curriculum (Boris's constants): touch scale 0->1 from step 10k over 50k steps,
-# yaw scale 0->1 from step 60k over 80k steps. Until then this env behaves exactly
-# like v1 (x-velocity only).
-# =====================================================================================
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -40,7 +18,6 @@ if base.TYPE_CHECKING:
 
 BLOCK_HALF_SIZE = base.BLOCK_HALF_SIZE
 
-# Push-face extents: the face is half-width wide and half-height tall.
 TOUCH_Y_LIMIT = BLOCK_HALF_SIZE[0]   # 0.025 m lateral
 TOUCH_Z_LIMIT = BLOCK_HALF_SIZE[2]   # 0.015 m vertical
 
@@ -52,8 +29,8 @@ YAW_CURRICULUM_START = 0.0
 YAW_CURRICULUM_END = 1.0
 YAW_CURRICULUM_BEGIN_STEP = 60_000
 YAW_CURRICULUM_STEPS = 80_000
-YAW_HOME_LIMIT = 1.0                 # rad around the per-env home yaw
-YAW_STEP_SCALE = 0.05                # rad per step at full curriculum
+YAW_HOME_LIMIT = 1.0
+YAW_STEP_SCALE = 0.05
 ACTION_CLIP = 1.0
 
 

@@ -1,8 +1,11 @@
 import time
+from pathlib import Path
 import mujoco
 import mujoco.viewer
 
-model = mujoco.MjModel.from_xml_path("jenga.xml")
+model = mujoco.MjModel.from_xml_path(
+    str(Path(__file__).resolve().parents[2] / "assets" / "jenga.xml")
+)
 data = mujoco.MjData(model)
 
 x_act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "hook_x_motor")

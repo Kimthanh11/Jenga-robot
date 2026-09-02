@@ -1,39 +1,4 @@
-"""Calibrate MuJoCo contact parameters using the drag ratio of the Jenga tower.
-
-The drag ratio quantifies how strongly the tower is dragged along when a block is
-pushed out of it:
-
-    drag ratio = max horizontal displacement over all non-target blocks
-                 / horizontal displacement of the target block
-
-sampled once the target has travelled a fixed reference distance.
-
-A physical tower yields a small ratio. The block resting on the layer above spans
-three stones, so friction from the target acts on roughly one third of its underside
-while the remaining two thirds hold it under the same load.
-
-The ratio bounds which blocks are extractable. A safe success requires every
-non-target block to stay within TOWER_SUCCESS_MAX_BLOCK_HORIZONTAL_SHIFT (12 mm)
-while the target travels the full success distance (112.5 mm), so the feasibility
-threshold is 12 / 112.5 = 0.107. Measured ratios reproduce the outcome of the
-scripted sweep in feasibility_sweep.py.
-
-Measured parameter sensitivities, pyramidal cone, default solref:
-
-    impratio    1     drag 0.664   (0.896 at mu = 0.48)
-    impratio   10     drag 0.302
-    impratio   30     drag 0.251   (0.194 at mu = 0.48)
-
-`impratio` is the stiffness of friction constraints relative to normal ones. At the
-MuJoCo default of 1 both are equally compliant and the stack shears elastically. The
-friction coefficient shifts the ratio by up to a factor of two, but the direction
-depends on `impratio` -- rising with mu at impratio 1, falling at impratio 30 -- so it
-cannot compensate for an incorrect stiffness. The elliptic cone yields ratios above
-1.9 at every stiffness and destroys the tower during the reset settle in half of all
-runs.
-
-Emits one CSV row per (target, cone, impratio, solref, friction, seed) combination.
-"""
+"""Sweep MuJoCo contact parameters and measure tower drag."""
 
 from __future__ import annotations
 
@@ -47,15 +12,7 @@ def _parse_floats(value: str) -> list[float]:
 
 
 def _append_row(csv_path, row) -> None:
-    """Append one result row to the CSV, creating the file and header if needed.
-
-    Rows are written as they are produced rather than buffered until the end, so that
-    a run terminated by its scheduler time limit still yields the cases it completed.
-
-    Args:
-        csv_path: Destination path, or None to disable writing.
-        row: Mapping of column name to value; its keys define the header.
-    """
+    """Append a result immediately so partial Slurm runs remain usable."""
     if csv_path is None:
         return
     path = Path(csv_path)
@@ -176,10 +133,7 @@ def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, a
     damaged_first = torch.zeros(num_envs, dtype=torch.bool, device=env.device)
     steps_taken = torch.zeros(num_envs, dtype=torch.long, device=env.device)
 
-    # A sampled environment is frozen by zeroing its action rather than allowed to
-    # terminate and reset. Each reset invokes randomize_block_physics, which rewrites
-    # geom_friction and pseudo_inertia for all 27 blocks and triggers a full model
-    # constant recompute; repeated resets dominate the runtime of the sweep.
+    # Freeze completed environments to avoid expensive physics randomization on reset.
     live_action = action.clone()
 
     for step in range(1, args.max_steps + 1):
@@ -209,8 +163,7 @@ def _measure(env, cfg, torch, action, targets, cone, impratio, friction, seed, a
         if bool(sampled.all().item()):
             break
 
-        # auto_reset is off, so an env that terminated must be reset before the next
-        # step. Frozen envs no longer terminate, so this fires at most once per env.
+        # Manual reset is required when auto_reset is disabled.
         done_ids = (cfg.tower_damage(env) | cfg.success_block_extract(env)) \
             .nonzero(as_tuple=False).squeeze(-1)
         if done_ids.numel() > 0:

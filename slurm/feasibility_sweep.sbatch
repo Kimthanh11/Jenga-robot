@@ -5,8 +5,8 @@
 # that no feedback controller or learned policy can extract the block.
 #
 # Usage:
-#   sbatch feasibility_sweep.sbatch
-#   sbatch feasibility_sweep.sbatch legal "-0.5,0.0,0.5" "0.20,0.38" "1,2,3"
+#   sbatch slurm/feasibility_sweep.sbatch
+#   sbatch slurm/feasibility_sweep.sbatch legal "-0.5,0.0,0.5" "0.20,0.38" "1,2,3"
 
 #SBATCH --job-name=jenga_feas
 #SBATCH -p stud
@@ -39,7 +39,7 @@ echo "impratio: ${IMPRATIO:-default} | cone: ${CONE:-default}"
 export WANDB_MODE=disabled
 export MUJOCO_GL=egl
 
-PYTHONUNBUFFERED=1 ./.venv/bin/python feasibility_sweep.py \
+PYTHONUNBUFFERED=1 ./.venv/bin/python -m scripts.feasibility_sweep \
   --targets="${TARGETS}" \
   --contact-z="${CONTACT_Z}" \
   --seeds="${SEEDS}" \

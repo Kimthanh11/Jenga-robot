@@ -1,66 +1,4 @@
-"""Abort variant of the low-level extraction task.
-
-Gives the policy the option to stop working on the selected block instead of being
-forced to continue until success, tower damage, or the episode length runs out. A
-block that cannot be extracted safely should be abandoned so another can be chosen,
-which is what a human player does and what a sequential game requires.
-
-The mechanism follows the design on the `timur` branch
-(mjlab_jenga/jenga_incomplete_random_abort_cfg.py), which established two points worth
-carrying over:
-
-* The termination is declared `time_out=True`. Aborting is an artificial cutoff, not a
-  failure state, so the value function must bootstrap at that point rather than treat
-  the state as worthless.
-* Accidental triggering has to be controlled. Thresholding a single sample under an
-  unbounded standard deviation makes a crossing near-certain, and that variant was
-  measured firing in 27% of episodes at iteration 286.
-
-The mechanism that variant uses for the second point does not transfer, and a run under
-it produced a maximum abort rate of exactly zero over 1150 iterations. It requires the
-signal to stay over threshold for a number of consecutive steps, which reduces the
-accidental rate to p**hold. With a standard deviation of 0.2 and a threshold of 0.70,
-p is 2.3e-4, so a hold of 100 puts the event at about 1e-37: it can never occur by
-chance. But the policy gradient on this output is proportional to how the return varies
-with the sampled value, and if the abort never happens the return does not vary with it
-at all. The gradient is zero, the head stays at its initialisation, and the decision
-cannot be learned. The guard against false positives and the only route to discovery
-are the same knob.
-
-That variant needed a large hold because its standard deviation was learned and reached
-5. Ours is fixed at 0.2, which controls accidental triggering by itself, so a single
-sample suffices and the threshold alone sets the rate. At 0.80 the accidental rate is
-one abort per 1.3 iterations, or about 2% of episodes -- often enough for the value to
-be estimated, rare enough not to disturb extraction:
-
-    threshold   per step   aborts/iteration   share of episodes
-         0.98   4.8e-07               0.01               0.03%
-         0.85   1.1e-05               0.26               0.75%
-         0.80   3.2e-05               0.78               2.19%
-         0.70   2.3e-04               5.72              15.03%
-
-This module differs from that one in a way that matters for reuse. That variant also
-had to add a tower-shift observation, because its policy had nothing to ground the
-decision in. Ours already observes `tower_state` and `support_presence`, so the
-observation space is unchanged at 45 and only the action space grows from 4 to 5. An
-existing checkpoint can therefore be warm-started by widening three tensors in the
-actor -- see widen_checkpoint_for_abort.py -- instead of retraining from scratch.
-
-Nothing in jenga_mjenv_cfg.py is modified. Deleting this file restores the previous
-behaviour exactly.
-
-Reward arithmetic at the current weights, for a block abandoned at 50 mm of progress:
-
-    success                    +8.0 progress  +10 success   = +18.0
-    tower damage               +8.0 progress  -20 damage    = -12.0
-    full timeout               +3.6 progress   -5 timeout   =  -1.4
-    abort                      +3.6 progress   -2 abort     =  +1.6
-
-Attempting is worth 18 - 30p against an abort value of 1.6, where p is the probability
-of damaging the tower, so the policy should abandon a block once p exceeds roughly
-0.55. Because the progress term rewards the furthest point reached and is not undone
-by aborting, the incentive is to push as far as is safe and only then stop.
-"""
+"""Optional policy action for abandoning the current extraction attempt."""
 
 from __future__ import annotations
 
@@ -82,17 +20,12 @@ if TYPE_CHECKING:
     from mjlab.envs import ManagerBasedRlEnv
 
 
-# Threshold the abort action must exceed. Held constant: a curriculum here is
-# ineffective anyway, because common_step_counter is restored on resume and a
-# warm-started run therefore begins at the end of the ramp.
+# Kept constant so resumed runs use the same decision boundary.
 ABORT_THRESHOLD_START = 0.80
 ABORT_THRESHOLD_END = 0.80
 ABORT_CURRICULUM_STEPS = 40_000
 
-# Consecutive over-threshold steps required before the abort takes effect. Must be 1
-# under a fixed standard deviation: any larger value raises the accidental rate to
-# p**hold, which for p = 3e-5 is small enough that the action never occurs and hence
-# never receives gradient. See the module docstring.
+# A longer hold made exploration of the abort action effectively impossible.
 ABORT_HOLD_STEPS = 1
 
 ABORT_PENALTY_WEIGHT = -2.0
@@ -109,11 +42,7 @@ def abort_threshold(env: ManagerBasedRlEnv) -> torch.Tensor:
 
 
 class _AbortHoldCounter:
-    """Fires once the abort action has been over threshold for ABORT_HOLD_STEPS steps.
-
-    Sized lazily, because configuration objects are built before the environment and
-    its env count exist.
-    """
+    """Track consecutive abort signals for each environment."""
 
     def __init__(self) -> None:
         self._hold: torch.Tensor | None = None
@@ -122,9 +51,7 @@ class _AbortHoldCounter:
         raw = env.action_manager.get_term("abort").raw_action[:, 0]
         if self._hold is None:
             self._hold = torch.zeros_like(raw, dtype=torch.long)
-        # Guard against a manager that does not forward reset() to plain callables:
-        # a freshly reset environment must not inherit a partial hold from the
-        # episode before it.
+        # Reset here as a fallback for managers that do not call reset() on callables.
         self._hold = torch.where(
             env.episode_length_buf <= 1, torch.zeros_like(self._hold), self._hold
         )
@@ -142,12 +69,7 @@ class _AbortHoldCounter:
 
 
 class _AbortHoldSignal(_AbortHoldCounter):
-    """The same condition as a float, for reward and metric terms.
-
-    A separate instance from the termination's on purpose: both are pure functions of
-    the same per-step inputs and each is called exactly once per step by its own
-    manager, so they stay in lockstep without sharing mutable state.
-    """
+    """Expose the abort condition to reward and metric terms."""
 
     def __call__(self, env: ManagerBasedRlEnv) -> torch.Tensor:
         return self._update(env).float()
@@ -187,22 +109,7 @@ class AbortSignalAction(ActionTerm):
 
 
 def last_action_without_abort(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """The previous action, excluding the abort signal.
-
-    The base task observes its own previous action so that the actor can account for
-    the action-rate penalty. Letting that observation grow with the new action would
-    widen the actor input from 45 to 46 and the critic input from 126 to 127, and in
-    the critic the extra element lands before block_all_pos, displacing 81 values. A
-    checkpoint of the base task could then only be reused by inserting a column in the
-    middle of the first layer -- exactly the kind of surgery that fails silently.
-
-    Excluding it keeps both observation spaces unchanged, so warm-starting only has to
-    widen the actor output. Little is lost: the abort signal drives no actuator, so it
-    does not enter the action-rate penalty in the way the physical actions do, and the
-    hold counter that actually decides the termination is not observable either way.
-
-    Relies on abort being registered last, which dict insertion order guarantees.
-    """
+    """Keep the base observation shape when adding the abort output."""
     return env.action_manager.prev_action[:, :-1]
 
 
@@ -233,13 +140,7 @@ def jenga_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 def jenga_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-    """The base runner configuration, unchanged.
-
-    experiment_name deliberately keeps the base value. Resuming resolves the checkpoint
-    as logs/rsl_rl/<experiment_name>/<load_run>, so renaming it would look for the
-    warm-start checkpoint in a directory that does not exist. Abort runs remain
-    distinguishable because train_low_level_stage.py appends "_abort" to the run name.
-    """
+    """Keep the base experiment name so warm-start checkpoints resolve correctly."""
     return base.jenga_ppo_runner_cfg()
 
 

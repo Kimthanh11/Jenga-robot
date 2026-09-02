@@ -1,14 +1,9 @@
 #!/bin/bash
-# Contact / friction calibration sweep for the Jenga tower.
-#
-# Measures the drag ratio (largest horizontal displacement of any non-target block
-# divided by the target's own displacement) over a grid of contact settings. This is
-# what decides which target blocks are physically extractable, so it has to run before
-# the RL target set is fixed.
+# Contact and friction calibration sweep.
 #
 # Usage:
-#   sbatch calibrate_drag.sbatch
-#   sbatch calibrate_drag.sbatch "0.10,0.20,0.30,0.40" "1.0,10.0,30.0" "pyramidal,elliptic"
+#   sbatch slurm/calibrate_drag.sbatch
+#   sbatch slurm/calibrate_drag.sbatch "0.10,0.20,0.30,0.40" "1.0,10.0,30.0" "pyramidal,elliptic"
 
 #SBATCH --job-name=jenga_calib
 #SBATCH -p stud
@@ -30,7 +25,6 @@ SOLREF="${5:-}"
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/feasibility
 
-# Reproducibility: the baseline runs could not be tied to a commit or interpreter.
 echo "commit:      $(git rev-parse HEAD)"
 echo "cwd:         $PWD"
 echo "python:      $(./.venv/bin/python -c 'import sys; print(sys.executable)')"
@@ -44,7 +38,7 @@ echo "solref:      ${SOLREF:-default}"
 export WANDB_MODE=disabled
 export MUJOCO_GL=egl
 
-PYTHONUNBUFFERED=1 ./.venv/bin/python calibrate_drag.py \
+PYTHONUNBUFFERED=1 ./.venv/bin/python -m scripts.calibrate_drag \
   --targets="${TARGETS}" \
   --frictions="${FRICTIONS}" \
   --impratio="${IMPRATIO}" \
