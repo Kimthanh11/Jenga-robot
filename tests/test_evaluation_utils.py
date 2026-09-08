@@ -13,6 +13,7 @@ SPEC.loader.exec_module(evaluation_utils)
 
 configure_evaluation_case = evaluation_utils.configure_evaluation_case
 evaluation_seed = evaluation_utils.evaluation_seed
+illegal_targets = evaluation_utils.illegal_targets
 resolve_targets = evaluation_utils.resolve_targets
 scenario_id = evaluation_utils.scenario_id
 target_groups = evaluation_utils.target_groups
@@ -68,6 +69,23 @@ class EvaluationUtilsTest(unittest.TestCase):
         self.assertEqual(targets, ("b1_1", "b8_3"))
         with self.assertRaisesRegex(ValueError, "Unknown"):
             resolve_targets("b10_1", self.cfg)
+
+    def test_illegal_targets_are_exactly_the_top_layer(self) -> None:
+        groups = target_groups(self.cfg)
+        self.assertEqual(illegal_targets(groups["legal"], self.cfg), ())
+        self.assertEqual(
+            illegal_targets(groups["trained"], self.cfg),
+            ("b9_1", "b9_2", "b9_3"),
+        )
+        self.assertEqual(len(illegal_targets(groups["tower"], self.cfg)), 3)
+
+    def test_duplicate_targets_need_an_explicit_opt_in(self) -> None:
+        # Evaluation would measure the repeated block twice under one scenario id;
+        # training uses repetition to raise a target's sampling share.
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            resolve_targets("b2_1,b2_1", self.cfg)
+        _, targets = resolve_targets("b2_1,b2_1", self.cfg, allow_duplicates=True)
+        self.assertEqual(targets, ("b2_1", "b2_1"))
 
     def test_missing_patterns_keep_target_present(self) -> None:
         pattern_ids = valid_missing_pattern_ids(self.cfg, "b5_2", 1)

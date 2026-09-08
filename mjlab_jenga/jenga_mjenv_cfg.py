@@ -114,15 +114,21 @@ RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 1
 RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
 RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
 FIXED_TARGET_BLOCK_NAME = "b6_1"
-# Targets that passed the scripted feasibility sweep.
+# Default training targets. Only blocks below the highest completed story are legal
+# moves, so layer LAYERS is excluded; those blocks stay in the tower as the load that
+# makes the layer below them the hardest legal target.
+#
+# Until the generalization evaluation this tuple also held b9_1, b9_2 and b9_3. Besides
+# being illegal moves, they actively conflicted with layer 8: the normalized layer
+# feature puts the two layers next to each other while the mechanics are opposite,
+# because nothing rests on the top layer. Layer 8 scored 0 % safe success even though
+# layer 9 was trained. Reproducing the earlier checkpoint therefore needs an explicit
+# --targets b2_1,b2_2,b2_3,b3_1,b9_1,b9_2,b9_3 --allow-illegal-targets.
 RANDOM_TARGET_BLOCK_NAMES = (
     "b2_1",
     "b2_2",
     "b2_3",
     "b3_1",
-    "b9_1",
-    "b9_2",
-    "b9_3",
 )
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
@@ -462,11 +468,10 @@ class TargetBlockCommand(CommandTerm):
             self._force_target_per_env = torch.tensor(
                 cycled, dtype=torch.long, device=self.device
             )
-        selectable = [
-            name_to_idx[name]
-            for name in cfg.selectable_target_names
-            if name in name_to_idx and name not in MISSING_BLOCK_CANDIDATES
-        ]
+        unknown = [name for name in cfg.selectable_target_names if name not in name_to_idx]
+        if unknown:
+            raise ValueError(f"Unknown selectable target blocks: {unknown}")
+        selectable = [name_to_idx[name] for name in cfg.selectable_target_names]
         self._selectable = torch.tensor(selectable, dtype=torch.long, device=self.device)
         self._num_selectable = int(self._selectable.numel())
         if self._num_selectable == 0:
@@ -695,14 +700,14 @@ class TargetBlockCommand(CommandTerm):
         if num_resets == 0:
             return
 
+        present = self._present_by_block()[env_ids]
         if self._force_target_per_env is not None:
             selected = self._force_target_per_env[env_ids]
             use_random = torch.ones(num_resets, dtype=torch.bool, device=self.device)
         elif self._force_target_idx is None:
             random_probability = random_target_block_scale(self._env)
             use_random = torch.rand(num_resets, device=self.device) < random_probability
-            present_by_block = self._present_by_block()
-            envs_without_missing = present_by_block[env_ids].all(dim=1)
+            envs_without_missing = present.all(dim=1)
             allow_random_with_missing = (
                 torch.rand(num_resets, device=self.device)
                 < random_target_with_missing_scale(self._env)
@@ -715,12 +720,19 @@ class TargetBlockCommand(CommandTerm):
                 device=self.device,
             )
             if torch.any(use_random):
-                random_choices = torch.randint(
-                    0,
-                    self._num_selectable,
-                    (int(use_random.sum().item()),),
-                    device=self.device,
-                )
+                available = present[use_random][:, self._selectable]
+                if not torch.all(available.any(dim=1)):
+                    raise ValueError("No selectable target is present in a reset environment.")
+                if torch.all(available):
+                    random_choices = torch.randint(
+                        0,
+                        self._num_selectable,
+                        (int(use_random.sum().item()),),
+                        device=self.device,
+                    )
+                else:
+                    # Reset events have already sampled the actual missing pattern.
+                    random_choices = torch.multinomial(available.float(), 1).squeeze(1)
                 selected[use_random] = self._selectable[random_choices]
         else:
             use_random = torch.ones(num_resets, dtype=torch.bool, device=self.device)
@@ -731,6 +743,8 @@ class TargetBlockCommand(CommandTerm):
                 device=self.device,
             )
 
+        if not torch.all(present.gather(1, selected.unsqueeze(1))):
+            raise ValueError("The fixed or forced target is missing in a reset environment.")
         self.selected_block_idx[env_ids] = selected
         self.selected_is_random[env_ids] = use_random
 
@@ -789,7 +803,9 @@ class TargetBlockCommand(CommandTerm):
 @dataclass(kw_only=True)
 class TargetBlockCommandCfg(CommandTermCfg):
     fixed_target_name: str = FIXED_TARGET_BLOCK_NAME
-    selectable_target_names: tuple[str, ...] = RANDOM_TARGET_BLOCK_NAMES
+    selectable_target_names: tuple[str, ...] = field(
+        default_factory=lambda: RANDOM_TARGET_BLOCK_NAMES
+    )
     force_target_name: str | None = None
     force_target_names: tuple[str, ...] = ()
     """Per-env forced targets, cycled over the envs. Lets one vectorized rollout cover

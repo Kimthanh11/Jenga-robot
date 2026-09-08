@@ -7,6 +7,11 @@ import argparse
 import mjlab_jenga.jenga_mjenv_cfg as cfg
 from mjlab.scripts.train import TrainConfig, launch_training
 from mjlab.tasks.registry import register_mjlab_task
+from mjlab_jenga.evaluation_utils import (
+    TARGET_SELECTOR_NAMES,
+    illegal_targets,
+    resolve_targets,
+)
 
 
 def main() -> None:
@@ -50,9 +55,19 @@ def main() -> None:
     parser.add_argument(
         "--targets",
         default=None,
-        help="Comma-separated target blocks, overriding RANDOM_TARGET_BLOCK_NAMES. "
+        help="Target blocks overriding RANDOM_TARGET_BLOCK_NAMES: either a named set "
+        f"({', '.join(TARGET_SELECTOR_NAMES)}) or a comma-separated block list. "
         "Repeating a name raises its sampling share, which is how a target the policy "
         "has written off can be given a concentrated signal without dropping the rest.",
+    )
+    parser.add_argument(
+        "--allow-illegal-targets",
+        action="store_true",
+        help="Permit top-layer blocks as targets. Standard play may only remove blocks "
+        "below the highest completed story, so these are illegal moves. They also "
+        "conflict with the layer below: the two are adjacent in the normalized layer "
+        "feature but mechanically opposite, because nothing rests on the top layer. "
+        "Only for deliberate ablations.",
     )
     parser.add_argument(
         "--yaw-limit",
@@ -84,10 +99,20 @@ def main() -> None:
     if args.yaw_limit is not None:
         cfg.YAW_TARGET_LIMIT = args.yaw_limit
     cfg.TOWER_SHIFT_RELATIVE_TO_BASE = args.base_relative_shift
+    # Resolve against the current defaults before overwriting them, so that a named set
+    # such as trained-legal means what it meant at the start of this run.
+    target_set = None
     if args.targets:
-        cfg.RANDOM_TARGET_BLOCK_NAMES = tuple(
-            t.strip() for t in args.targets.split(",") if t.strip()
-        )
+        target_set, resolved = resolve_targets(args.targets, cfg, allow_duplicates=True)
+        forbidden = sorted(set(illegal_targets(resolved, cfg)))
+        if forbidden and not args.allow_illegal_targets:
+            parser.error(
+                f"--targets {args.targets!r} resolves to blocks that the top-layer "
+                f"rule forbids as targets: {', '.join(forbidden)}. They remain in the "
+                "tower as load; they are just not selectable. Pass "
+                "--allow-illegal-targets to override."
+            )
+        cfg.RANDOM_TARGET_BLOCK_NAMES = resolved
     # The abort variant shares these globals with the base configuration.
     task = cfg
     if args.abort:
@@ -117,7 +142,12 @@ def main() -> None:
     if args.base_relative_shift:
         run_name += "_baseshift"
     if args.targets:
-        run_name += "_tgt%d" % len(cfg.RANDOM_TARGET_BLOCK_NAMES)
+        label = (
+            target_set
+            if target_set != "explicit"
+            else "tgt%d" % len(cfg.RANDOM_TARGET_BLOCK_NAMES)
+        )
+        run_name += "_" + label.replace("-", "")
     if args.run_suffix:
         run_name += f"_{args.run_suffix}"
     agent_cfg.run_name = run_name
@@ -128,6 +158,7 @@ def main() -> None:
         f"success_curriculum_steps={cfg.SUCCESS_CURRICULUM_STEPS} "
         f"yaw_curriculum=({cfg.YAW_CURRICULUM_START},{cfg.YAW_CURRICULUM_END}) "
         f"base_relative_shift={cfg.TOWER_SHIFT_RELATIVE_TO_BASE} "
+        f"target_set={target_set or 'default'} "
         f"targets={cfg.RANDOM_TARGET_BLOCK_NAMES} "
         f"yaw_target_limit={cfg.YAW_TARGET_LIMIT} "
         f"num_envs={args.num_envs} iterations={args.iterations}",
