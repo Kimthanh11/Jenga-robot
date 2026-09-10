@@ -6,18 +6,19 @@ The script extends the standard MJLab playback functionality with additional opt
 
 ## Running the Policy
 
-Run the script from the `Jenga-robot/jenga` directory:
+Run the script from the `Jenga-robot/jenga` directory using the project's `uv` environment:
 
 ```bash
-python -m scripts.play --agent trained --checkpoint <CHECKPOINT_PATH>
+uv run python -m scripts.play --agent trained --checkpoint <CHECKPOINT_PATH>
 ```
 
 For example:
 
 ```bash
-python -m scripts.play \
+uv run python -m scripts.play \
     --agent trained \
-    --checkpoint "checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt" \
+    --checkpoint "../checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt" \
+    --device cpu \
     --freeze-yaw \
     --missing 3
 ```
@@ -25,7 +26,7 @@ python -m scripts.play \
 On Windows PowerShell, the command can be written on one line:
 
 ```powershell
-python -m scripts.play --agent trained --checkpoint "D:\Darmstadt\Semester_3\integrated robot\jenga\Jenga-robot\checkpoints\jenga_low_level_missing3_noyaw_model_8500.pt" --device cpu --freeze-yaw --missing 3
+uv run python -m scripts.play --agent trained --checkpoint "D:\Darmstadt\Semester_3\integrated robot\jenga\Jenga-robot\checkpoints\jenga_low_level_missing3_noyaw_model_8500.pt" --device cpu --freeze-yaw --missing 3
 ```
 
 ## Playback Options
@@ -44,10 +45,9 @@ The custom `scripts/play.py` provides additional options for evaluating and debu
 | `--debug-target` | Print target and reset geometry for debugging. |
 | `--no-terminations` | Disable success and tower-damage terminations. |
 
-
 ## Recommended Playback Configuration
 
-When evaluating a checkpoint, the playback configuration should match the conditions under which the policy was trained.
+The playback configuration should match the conditions under which the policy was trained.
 
 For the checkpoint:
 
@@ -55,12 +55,13 @@ For the checkpoint:
 jenga_low_level_missing3_noyaw_model_8500.pt
 ```
 
-the corresponding playback command is:
+use:
 
 ```bash
-python -m scripts.play \
+uv run python -m scripts.play \
     --agent trained \
-    --checkpoint "checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt" \
+    --checkpoint "../checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt" \
+    --device cpu \
     --missing 3 \
     --freeze-yaw
 ```
@@ -69,7 +70,6 @@ Here:
 
 - `--agent trained` loads the trained policy.
 - `--checkpoint` specifies the PPO checkpoint.
+- `--device cpu` runs playback on the CPU.
 - `--missing 3` selects the three-missing-block condition.
 - `--freeze-yaw` reproduces the no-yaw training condition.
-
-Using the same task configuration during training and playback is important for evaluating the policy under the intended conditions.
