@@ -16,7 +16,7 @@ from mjlab.envs.mdp.rewards import action_rate_l2
 from mjlab.viewer import ViewerConfig
 
 from constants import *
-import scene
+from utils import *
 from mdp.observations import *
 from mdp.actions import *
 from mdp.events import *

@@ -6,7 +6,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.entity import Entity, EntityCfg, EntityArticulationInfoCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from constants import *
-from scene import *
+from utils import *
 
 def _rz_quat(angle_rad: float) -> tuple[float, float, float, float]:
     return (math.cos(angle_rad / 2), 0.0, 0.0, math.sin(angle_rad / 2))

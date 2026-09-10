@@ -1,7 +1,7 @@
 from mjlab.envs import ManagerBasedRlEnv
 from constants import _HOOK_ALL_CFG, _HOOK_JOINT_ORDER, _TARGET_BLOCK_CFG, CONTACT_FORCE_OBS_NORMALIZER, CONTACT_FORCE_OBS_CLIP, TOWER_DAMAGE_MAX_BLOCK_HORIZONTAL_SHIFT, TOWER_DAMAGE_MAX_BLOCK_ROTATION, TOWER_DAMAGE_MAX_BLOCK_VERTICAL_SHIFT
 from mdp.commands import *
-from scene import *
+from utils import *
 import torch
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.utils.lab_api.math import quat_apply_inverse

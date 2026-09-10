@@ -9,7 +9,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from mdp.commands import *
-from scene import *
+from utils import *
 from constants import _TARGET_BLOCK_CFG
 
 

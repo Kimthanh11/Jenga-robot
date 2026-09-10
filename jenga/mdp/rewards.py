@@ -6,7 +6,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.utils.lab_api.math import quat_apply, quat_apply_inverse
 from mjlab.sensor import ContactSensor
 from constants import *
-from scene import get_block_infos, _rz_quat, _INITIAL_BLOCK_POS_BY_NAME, hook_joint_pos_ordered
+from utils import get_block_infos, _rz_quat, _INITIAL_BLOCK_POS_BY_NAME, hook_joint_pos_ordered
 from mdp.commands import *
 from mdp.actions import _linear_curriculum_scale, target_block_pose, block_point_to_world, hook_slide_targets_for_tip_world, push_velocity_target, yaw_curriculum_scale
 
