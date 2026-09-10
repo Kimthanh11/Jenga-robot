@@ -101,34 +101,38 @@ def main() -> None:
 
     # Importing the package registers the normal training task. We then patch only
     # this process and register a separate play-only task for teleport inspection.
-    import mjlab_jenga.jenga_mjenv_cfg as cfg
+    import rl.env_cfgs as cfg
+    import constants
+
+    from rl.rl_cfg import jenga_ppo_runner_cfg
     from mjlab.scripts.play import PlayConfig, run_play
     from mjlab.tasks.registry import register_mjlab_task
 
-    cfg.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
-    cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+    constants.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 0.0
+    constants.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 0.0
+
     if args.missing > 0:
-        cfg.FORCED_MISSING_BLOCK_COUNT = args.missing
-        cfg.MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = -1
-        cfg.MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
-        cfg.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 1.0
-        cfg.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 1.0
-    cfg.RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
-    cfg.RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
-    cfg.RANDOM_TARGET_BLOCK_START_PROBABILITY = 1.0
-    cfg.RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
-    cfg.RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 0.0
-    cfg.RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
+        constants.FORCED_MISSING_BLOCK_COUNT = args.missing
+        constants.MISSING_BLOCK_RANDOMIZATION_BEGIN_STEP = -1
+        constants.MISSING_BLOCK_RANDOMIZATION_RAMP_STEPS = 1
+        constants.MISSING_BLOCK_RANDOMIZATION_START_PROBABILITY = 1.0
+        constants.MISSING_BLOCK_RANDOMIZATION_END_PROBABILITY = 1.0
+    constants.RANDOM_TARGET_BLOCK_BEGIN_STEP = -1
+    constants.RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
+    constants.RANDOM_TARGET_BLOCK_START_PROBABILITY = 1.0
+    constants.RANDOM_TARGET_BLOCK_END_PROBABILITY = 1.0
+    constants.RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 0.0
+    constants.RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 0.0
     if args.force_yaw and args.freeze_yaw:
         parser.error("--force-yaw and --freeze-yaw are mutually exclusive")
     if args.force_yaw:
-        cfg.YAW_CURRICULUM_START = cfg.YAW_CURRICULUM_END
+        constants.YAW_CURRICULUM_START = constants.YAW_CURRICULUM_END
     if args.freeze_yaw:
-        cfg.YAW_CURRICULUM_START = 0.0
-        cfg.YAW_CURRICULUM_END = 0.0
+        constants.YAW_CURRICULUM_START = 0.0
+        constants.YAW_CURRICULUM_END = 0.0
     print(
-        f"yaw: curriculum=({cfg.YAW_CURRICULUM_START}, {cfg.YAW_CURRICULUM_END}) "
-        f"limit={cfg.YAW_TARGET_LIMIT} rad | missing blocks: {args.missing}",
+        f"yaw: curriculum=({constants.YAW_CURRICULUM_START}, {constants.YAW_CURRICULUM_END}) "
+        f"limit={constants.YAW_TARGET_LIMIT} rad | missing blocks: {args.missing}",
         flush=True,
     )
 
@@ -145,7 +149,7 @@ def main() -> None:
         task_id=task_id,
         env_cfg=env_cfg,
         play_env_cfg=play_env_cfg,
-        rl_cfg=cfg.jenga_ppo_runner_cfg(),
+        rl_cfg=jenga_ppo_runner_cfg(),
     )
 
     run_play(
