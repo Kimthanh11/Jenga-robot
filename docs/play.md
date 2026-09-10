@@ -6,7 +6,7 @@ The script extends the standard MJLab playback functionality with additional opt
 
 ## Running the Policy
 
-Run the script from the `Jenga-robot/mjlab_jenga/jenga` directory:
+Run the script from the `Jenga-robot/jenga` directory:
 
 ```bash
 python -m scripts.play --agent trained --checkpoint <CHECKPOINT_PATH>
