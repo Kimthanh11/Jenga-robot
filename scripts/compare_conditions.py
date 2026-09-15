@@ -63,7 +63,8 @@ def exact_mcnemar(only_a: int, only_b: int) -> float:
     if n == 0:
         return 1.0
     tail = sum(math.comb(n, k) for k in range(min(only_a, only_b) + 1))
-    return min(1.0, 2.0 * tail / 2**n)
+    # Integer true division: with a float factor the tail overflows beyond ~1000 pairs.
+    return min(1.0, (2 * tail) / 2**n)
 
 
 def paired_mean_difference(differences: list[float]) -> tuple[float, float, float]:

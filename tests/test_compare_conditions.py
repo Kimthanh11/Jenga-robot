@@ -30,6 +30,10 @@ class CompareConditionsTest(unittest.TestCase):
             compare_conditions.exact_mcnemar(3, 7), compare_conditions.exact_mcnemar(7, 3)
         )
 
+    def test_exact_mcnemar_handles_thousands_of_discordant_pairs(self) -> None:
+        self.assertLess(compare_conditions.exact_mcnemar(195, 1596), 1e-100)
+        self.assertAlmostEqual(compare_conditions.exact_mcnemar(1000, 1000), 1.0, places=6)
+
     def test_condition_label_can_select_a_controller(self) -> None:
         pattern = str(MODULE_PATH)
         label, controller, files = compare_conditions.parse_condition(f"base@tap={pattern}")
