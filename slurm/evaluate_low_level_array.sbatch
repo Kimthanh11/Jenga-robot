@@ -4,6 +4,10 @@
 # Usage:
 #   sbatch --array=0-19%2 slurm/evaluate_low_level_array.sbatch \
 #     logs/rsl_rl/jenga/<run>/model_8500.pt heldout-legal
+#
+# Settling check over all legal targets, one seed, 200 steps held after success:
+#   sbatch --array=0-23%1 slurm/evaluate_low_level_array.sbatch \
+#     logs/rsl_rl/jenga/<run>/model_8500.pt legal 0 50 50 1 2000 freeze 200
 
 #SBATCH --job-name=jenga_eval
 #SBATCH -p stud
@@ -25,6 +29,7 @@ NUM_ENVS="${5:-50}"
 SEEDS="${6:-1,2,3,4,5}"
 MAX_STEPS="${7:-2000}"
 YAW_MODE="${8:-freeze}"
+SETTLE="${9:-0}"   # control steps simulated after success before the tower is judged again
 TARGET_INDEX="${SLURM_ARRAY_TASK_ID:?submit this script with --array}"
 RESULT_ID="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 
@@ -53,6 +58,7 @@ else
   echo "yaw mode must be freeze or configured" >&2
   exit 2
 fi
+if [ "${SETTLE}" != "0" ]; then CMD+=(--settle-steps "${SETTLE}"); fi
 
 echo "commit:       $(git rev-parse HEAD)"
 echo "checkpoint:   ${CHECKPOINT}"

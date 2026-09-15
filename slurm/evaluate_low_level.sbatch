@@ -31,6 +31,7 @@ YAWLIMIT="${9:-freeze}"  # freeze, configured, or a numeric limit in radians
 ABORT="${10:-}"
 SEEDS="${11:-1,2,3,4,5}"
 MAX_STEPS="${12:-2000}"
+SETTLE="${13:-0}"   # control steps simulated after success before the tower is judged again
 
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 mkdir -p logs/slurm logs/eval
@@ -63,6 +64,7 @@ if [ -n "${LEGACY}" ];   then CMD+=(--legacy-distribution); fi
 if [ -n "${IMPRATIO}" ]; then CMD+=(--impratio "${IMPRATIO}"); fi
 if [ -n "${CONE}" ];     then CMD+=(--cone "${CONE}"); fi
 if [ -n "${ABORT}" ]; then CMD+=(--abort); fi
+if [ "${SETTLE}" != "0" ]; then CMD+=(--settle-steps "${SETTLE}"); fi
 if [ "${YAWLIMIT}" = "freeze" ]; then
   CMD+=(--freeze-yaw)
 elif [ "${YAWLIMIT}" = "configured" ]; then

@@ -258,7 +258,7 @@ def summarize_episode_rows(rows: list[dict]) -> dict:
     extraction_low, extraction_high = wilson_interval(extractions, total)
     damage_low, damage_high = wilson_interval(damages, total)
     first = rows[0]
-    return {
+    summary = {
         "controller": first["controller"],
         "checkpoint": first["checkpoint"],
         "commit": first["commit"],
@@ -297,3 +297,15 @@ def summarize_episode_rows(rows: list[dict]) -> dict:
         "stop_rate": mean(rows, "stop_rate"),
         "retreat_rate": mean(rows, "retreat_rate"),
     }
+    if "reached_success" in first:
+        # Settling-period evaluation: success_rate above is judged after settling.
+        reached = bool_count(rows, "reached_success")
+        reached_low, reached_high = wilson_interval(reached, total)
+        summary["settle_steps"] = first["settle_steps"]
+        summary["reached_success_rate"] = reached / total
+        summary["reached_success_ci95_low"] = reached_low
+        summary["reached_success_ci95_high"] = reached_high
+        summary["damaged_after_success_rate"] = (
+            bool_count(rows, "damaged_after_success") / total
+        )
+    return summary
