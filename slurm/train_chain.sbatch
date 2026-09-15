@@ -22,6 +22,9 @@
 #SBATCH --job-name=jenga_chain
 #SBATCH -p stud
 #SBATCH --gres=gpu:1
+# The V100s on the DGX are about 40 % slower per iteration than an RTX 3080, but they
+# are often free while every RTX node is taken; waiting costs more than the slowdown.
+#SBATCH -C 'rtx2080|rtx3080|v100'
 #SBATCH -c 1
 #SBATCH --mem-per-cpu=2G
 #SBATCH -t 12:00:00

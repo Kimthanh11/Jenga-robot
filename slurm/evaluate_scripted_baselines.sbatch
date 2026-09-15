@@ -9,7 +9,7 @@
 #SBATCH --job-name=jenga_base
 #SBATCH -p stud
 #SBATCH --gres=gpu:1
-#SBATCH -C 'rtx2080|rtx3080'
+#SBATCH -C 'rtx2080|rtx3080|v100'
 #SBATCH -c 1
 #SBATCH --mem-per-cpu=2G
 #SBATCH -t 08:00:00
