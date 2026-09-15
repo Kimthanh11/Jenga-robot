@@ -84,6 +84,13 @@ def main() -> None:
         "abandoned. Warm-start from a base checkpoint widened by "
         "scripts/widen_checkpoint_for_abort.py.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for PPO and the environment. Unset keeps the runner default of 42, "
+        "which every run before independent-seed repetitions used.",
+    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -127,6 +134,8 @@ def main() -> None:
     agent_cfg.max_iterations = args.iterations
     if args.entropy_coef is not None:
         agent_cfg.algorithm.entropy_coef = args.entropy_coef
+    if args.seed is not None:
+        agent_cfg.seed = args.seed
 
     run_name = f"low_level_{args.stage}"
     if args.entropy_coef is not None:
@@ -148,6 +157,8 @@ def main() -> None:
             else "tgt%d" % len(cfg.RANDOM_TARGET_BLOCK_NAMES)
         )
         run_name += "_" + label.replace("-", "")
+    if args.seed is not None:
+        run_name += f"_s{args.seed}"
     if args.run_suffix:
         run_name += f"_{args.run_suffix}"
     agent_cfg.run_name = run_name
@@ -161,6 +172,7 @@ def main() -> None:
         f"target_set={target_set or 'default'} "
         f"targets={cfg.RANDOM_TARGET_BLOCK_NAMES} "
         f"yaw_target_limit={cfg.YAW_TARGET_LIMIT} "
+        f"seed={agent_cfg.seed} "
         f"num_envs={args.num_envs} iterations={args.iterations}",
         flush=True,
     )
