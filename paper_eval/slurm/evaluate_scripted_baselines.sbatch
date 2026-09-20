@@ -55,9 +55,9 @@ if [ "${CONTROLLERS}" = "protocol-array" ]; then
 fi
 
 # REPO_DIR defaults to the timur side clone; the venv is the shared one of the main
-# project (same pattern as train_incomplete_random.sbatch). Submit from REPO_DIR, or make
-# sure REPO_DIR/logs/paper_eval exists first: sbatch opens the --output file before this
-# script runs.
+# project (same pattern as train_incomplete_random.sbatch). The --output path is relative
+# to the directory you submit from and sbatch opens it before this script runs, so run
+# `mkdir -p logs/paper_eval` there once before the first submission.
 REPO_DIR="${REPO_DIR:-/home/share/jenga_project/Jenga-robot-timur}"
 VENV_PY=/home/share/jenga_project/Jenga-robot/.venv/bin/python
 cd "${REPO_DIR}"

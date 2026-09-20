@@ -5,12 +5,13 @@ at commit 56527ca8a5e5b6b864a046cc2d9074e45b6a8845 (files copied with `git show`
 imports rewritten to `mjlab_jenga_paper`). It is intentionally separate from `mjlab_jenga`:
 `mjlab_jenga_paper/` registers no mjlab tasks and shares no code with the timur task configuration.
 
-- `mjlab_jenga_paper/`: `jenga_mjenv_cfg.py`, `evaluation_utils.py`, empty `__init__.py`.
+- `mjlab_jenga_paper/`: `jenga_mjenv_cfg.py`, `evaluation_utils.py`, an `__init__.py` that deliberately registers nothing.
 - `paper_eval/scripts/`: `evaluate_low_level.py` (policy), `evaluate_scripted_baselines.py`
   (settle, straight, pulsed, tap, forcelim, stall), `compare_conditions.py`, `analyze_evaluation.py` and
   `analyze_failure_modes.py` (the last three read episode CSVs only).
 - `paper_eval/slurm/`: sbatch wrappers; `REPO_DIR` defaults to the timur side clone, output to `logs/paper_eval/`.
-- `checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt`: reported checkpoint, sha256 270a9676... (`--abort` needs `jenga_abort_cfg.py`, not vendored).
+- `checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt`: reported checkpoint, sha256 270a9676...
+- Not vendored: `tests/test_target_selection.py` (needs mjlab at runtime, imports the original package name) and `jenga_abort_cfg.py`; the `--abort` mode of evaluate_low_level.py is therefore unsupported here.
 
 Run from the repo root in an environment with mjlab:
 

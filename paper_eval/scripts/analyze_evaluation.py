@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-from collections import defaultdict
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 # Repo root on sys.path so that `python paper_eval/scripts/X.py` finds mjlab_jenga_paper.
