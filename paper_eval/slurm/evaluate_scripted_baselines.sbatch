@@ -5,6 +5,7 @@
 #   sbatch paper_eval/slurm/evaluate_scripted_baselines.sbatch heldout-legal 0
 #   sbatch paper_eval/slurm/evaluate_scripted_baselines.sbatch trained-legal 0,1,2,3 straight,pulsed,tap
 #   sbatch --array=0-19%2 paper_eval/slurm/evaluate_scripted_baselines.sbatch heldout-legal 0 protocol-array
+#   sbatch paper_eval/slurm/evaluate_scripted_baselines.sbatch legal 0 straight,forcelim,stall 50 50 1 2000 20 10 5 0.0 0.0 200
 
 #SBATCH --job-name=jenga_base
 #SBATCH -p stud
@@ -30,6 +31,10 @@ PAUSE_STEPS="${9:-10}"
 RETREAT_STEPS="${10:-5}"
 CONTACT_X="${11:-0.0}"
 CONTACT_Z="${12:-0.0}"
+SETTLE="${13:-0}"      # control steps simulated after success before the tower is judged again
+FRICTION="${14:-}"     # LO,HI sliding-friction range; empty keeps the configured range
+# Optional extra flags of the script, e.g. EXTRA_ARGS="--force-limit 3 --stall-window 30"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 # Array index 0..19 selects one controller and seed pair.
 if [ "${CONTROLLERS}" = "protocol-array" ]; then
@@ -94,5 +99,8 @@ PYTHONUNBUFFERED=1 "${VENV_PY}" paper_eval/scripts/evaluate_scripted_baselines.p
   --contact-x "${CONTACT_X}" \
   --contact-z "${CONTACT_Z}" \
   --device cuda:0 \
+  --settle-steps "${SETTLE}" \
+  ${FRICTION:+--friction-range "${FRICTION}"} \
   --episodes-csv "${EPISODES_OUT}" \
-  --summary-csv "${SUMMARY_OUT}"
+  --summary-csv "${SUMMARY_OUT}" \
+  ${EXTRA_ARGS}

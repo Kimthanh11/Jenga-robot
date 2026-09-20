@@ -30,6 +30,7 @@ SEEDS="${6:-1,2,3,4,5}"
 MAX_STEPS="${7:-2000}"
 YAW_MODE="${8:-freeze}"
 SETTLE="${9:-0}"   # control steps simulated after success before the tower is judged again
+FRICTION="${10:-}" # LO,HI sliding-friction range, e.g. 0.20,0.60; empty keeps the configured range
 TARGET_INDEX="${SLURM_ARRAY_TASK_ID:?submit this script with --array}"
 RESULT_ID="${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 
@@ -66,6 +67,7 @@ else
   exit 2
 fi
 if [ "${SETTLE}" != "0" ]; then CMD+=(--settle-steps "${SETTLE}"); fi
+if [ -n "${FRICTION}" ]; then CMD+=(--friction-range "${FRICTION}"); fi
 
 echo "commit:       $(git rev-parse HEAD)"
 echo "checkpoint:   ${CHECKPOINT}"

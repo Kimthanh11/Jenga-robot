@@ -21,6 +21,7 @@ from mjlab_jenga_paper.evaluation_utils import (
     configure_evaluation_case,
     evaluation_seed,
     git_commit,
+    parse_float_range,
     parse_int_csv,
     pattern_label,
     resolve_targets,
@@ -481,6 +482,12 @@ def main() -> None:
     parser.add_argument("--impratio", type=float)
     parser.add_argument("--cone")
     parser.add_argument(
+        "--friction-range",
+        help="LO,HI: sliding-friction range sampled per block at every reset, replacing "
+        "the configured range. Set before the environment is created; the value is "
+        "written to friction_sliding_min/max.",
+    )
+    parser.add_argument(
         "--settle-steps",
         type=int,
         default=0,
@@ -518,6 +525,11 @@ def main() -> None:
     if args.freeze_yaw:
         cfg.YAW_CURRICULUM_START = 0.0
         cfg.YAW_CURRICULUM_END = 0.0
+    if args.friction_range is not None:
+        try:
+            cfg.RESET_FRICTION_SLIDING_RANGE = parse_float_range(args.friction_range)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     try:
         target_set, targets = resolve_targets(args.targets, cfg)

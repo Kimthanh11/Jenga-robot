@@ -124,6 +124,17 @@ def parse_int_csv(value: str) -> tuple[int, ...]:
     return values
 
 
+def parse_float_range(value: str) -> tuple[float, float]:
+    """Parse ``LO,HI`` into a positive, ordered pair (used for the friction range)."""
+    parts = [item.strip() for item in value.split(",")]
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(f"Expected LO,HI, got {value!r}.")
+    low, high = float(parts[0]), float(parts[1])
+    if not 0.0 < low <= high:
+        raise ValueError(f"Range must satisfy 0 < LO <= HI, got {value!r}.")
+    return low, high
+
+
 def valid_missing_pattern_ids(cfg, target: str, missing_level: int) -> tuple[int, ...]:
     """Return exact-level patterns that leave the selected target in the tower."""
     if missing_level < 0:

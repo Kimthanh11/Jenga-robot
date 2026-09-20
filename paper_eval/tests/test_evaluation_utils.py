@@ -12,6 +12,7 @@ evaluation_utils = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(evaluation_utils)
 
 configure_evaluation_case = evaluation_utils.configure_evaluation_case
+parse_float_range = evaluation_utils.parse_float_range
 evaluation_seed = evaluation_utils.evaluation_seed
 illegal_targets = evaluation_utils.illegal_targets
 resolve_targets = evaluation_utils.resolve_targets
@@ -23,6 +24,13 @@ wilson_interval = evaluation_utils.wilson_interval
 
 
 class EvaluationUtilsTest(unittest.TestCase):
+    def test_parse_float_range(self) -> None:
+        self.assertEqual(parse_float_range("0.2,0.6"), (0.2, 0.6))
+        self.assertEqual(parse_float_range(" 0.3 , 0.3 "), (0.3, 0.3))
+        for bad in ("0.2", "0.6,0.2", "0,0.5", "a,b", "0.2,0.3,0.4", "0.2,"):
+            with self.assertRaises(ValueError):
+                parse_float_range(bad)
+
     def setUp(self) -> None:
         self.cfg = SimpleNamespace(
             LAYERS=9,

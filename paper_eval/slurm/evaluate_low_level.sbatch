@@ -32,6 +32,7 @@ ABORT="${10:-}"
 SEEDS="${11:-1,2,3,4,5}"
 MAX_STEPS="${12:-2000}"
 SETTLE="${13:-0}"   # control steps simulated after success before the tower is judged again
+FRICTION="${14:-}"  # LO,HI sliding-friction range, e.g. 0.20,0.60; empty keeps the configured range
 
 # REPO_DIR defaults to the timur side clone; the venv is the shared one of the main
 # project (same pattern as train_incomplete_random.sbatch). Submit from REPO_DIR, or make
@@ -72,6 +73,7 @@ if [ -n "${IMPRATIO}" ]; then CMD+=(--impratio "${IMPRATIO}"); fi
 if [ -n "${CONE}" ];     then CMD+=(--cone "${CONE}"); fi
 if [ -n "${ABORT}" ]; then CMD+=(--abort); fi
 if [ "${SETTLE}" != "0" ]; then CMD+=(--settle-steps "${SETTLE}"); fi
+if [ -n "${FRICTION}" ]; then CMD+=(--friction-range "${FRICTION}"); fi
 if [ "${YAWLIMIT}" = "freeze" ]; then
   CMD+=(--freeze-yaw)
 elif [ "${YAWLIMIT}" = "configured" ]; then

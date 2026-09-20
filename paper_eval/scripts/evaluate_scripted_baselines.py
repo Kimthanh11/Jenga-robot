@@ -1,4 +1,13 @@
-"""Evaluate scripted controllers under the policy evaluation protocol."""
+"""Evaluate scripted controllers under the policy evaluation protocol.
+
+Controllers: settle (no push), straight (constant maximum push), pulsed and tap
+(contact-triggered schedules), forcelim (maximum push scaled down when the hook contact
+force exceeds --force-limit) and stall (maximum push; when the contact force exceeds
+--stall-force while the target progress grew by less than --stall-eps over the last
+--stall-window steps, retreat for --stall-retreat-steps and then hold still). forcelim and
+stall use only the signals the policy also observes (contact force, target progress).
+--settle-steps N keeps simulating N steps after success with the push stopped and judges
+the tower again, as evaluate_low_level.py --settle-steps does for the policy."""
 
 from __future__ import annotations
 
@@ -19,6 +28,7 @@ from mjlab_jenga_paper.evaluation_utils import (
     configure_evaluation_case,
     evaluation_seed,
     git_commit,
+    parse_float_range,
     parse_int_csv,
     pattern_label,
     resolve_targets,
@@ -29,7 +39,7 @@ from mjlab_jenga_paper.evaluation_utils import (
 )
 
 
-CONTROLLERS = ("settle", "straight", "pulsed", "tap")
+CONTROLLERS = ("settle", "straight", "pulsed", "tap", "forcelim", "stall")
 
 
 def _actions(
@@ -46,6 +56,11 @@ def _actions(
     contact_x: float,
     contact_z: float,
     device: str,
+    force: torch.Tensor,
+    stalled: torch.Tensor,
+    stall_age: torch.Tensor,
+    force_limit: float,
+    stall_retreat_steps: int,
 ) -> torch.Tensor:
     action = torch.zeros((num_envs, action_dim), device=device)
     action[live, 1] = contact_x
@@ -54,6 +69,18 @@ def _actions(
         return action
     if controller == "straight":
         action[live, 0] = -1.0
+        return action
+    if controller == "forcelim":
+        # Push at maximum speed; above the limit the command shrinks like limit / force
+        # (a force twice the limit halves it). force is the value of the previous step.
+        scale = torch.clamp(force_limit / force.clamp(min=1e-6), max=1.0)
+        action[live, 0] = -scale[live]
+        return action
+    if controller == "stall":
+        # Push until a stall is declared, then retreat fully for stall_retreat_steps and
+        # hold still (abandon the target; the episode ends by timeout).
+        action[live & ~stalled, 0] = -1.0
+        action[live & stalled & (stall_age < stall_retreat_steps), 0] = 1.0
         return action
 
     # Reach the face continuously. Once contact has been observed, use a fixed
@@ -77,6 +104,49 @@ def _actions(
         action[retreating, 0] = 1.0
         return action
     raise ValueError(f"Unknown controller: {controller}")
+
+
+def _stall_update(
+    *,
+    stalled: torch.Tensor,
+    hist: torch.Tensor,
+    hist_count: torch.Tensor,
+    live: torch.Tensor,
+    force: torch.Tensor,
+    stall_force: float,
+    stall_eps: float,
+    stall_window: int,
+) -> None:
+    """Declare a stall: force above stall_force and progress up by < stall_eps in the window.
+
+    hist is a ring buffer of the target progress recorded on every step since first contact
+    (window + 1 slots). With hist_count entries recorded, entry hist_count - 1 is the newest
+    and entry hist_count - 1 - window sits in slot hist_count % (window + 1), so a window of
+    stall_window steps needs stall_window + 1 entries. Once stalled, always stalled.
+    """
+    size = stall_window + 1
+    ready = live & ~stalled & (hist_count >= size)
+    ids = torch.nonzero(ready, as_tuple=False).squeeze(-1)
+    if ids.numel() == 0:
+        return
+    newest = hist[ids, (hist_count[ids] - 1) % size]
+    oldest = hist[ids, hist_count[ids] % size]
+    hit = (force[ids] > stall_force) & ((newest - oldest) < stall_eps)
+    stalled[ids[hit]] = True
+
+
+def _stall_record(
+    *,
+    hist: torch.Tensor,
+    hist_count: torch.Tensor,
+    mask: torch.Tensor,
+    progress: torch.Tensor,
+) -> None:
+    ids = torch.nonzero(mask, as_tuple=False).squeeze(-1)
+    if ids.numel() == 0:
+        return
+    hist[ids, hist_count[ids] % hist.shape[1]] = progress[ids]
+    hist_count[ids] += 1
 
 
 def _reason(env: ManagerBasedRlEnv, env_id: int) -> str:
@@ -118,6 +188,7 @@ def _episode_row(
     retreat_phase_steps: int,
     contact_x: float,
     contact_z: float,
+    extra: dict | None = None,
 ) -> dict:
     pattern_id = int(env._jenga_missing_pattern_id[env_id].item())
     episode_steps = max(int(steps[env_id].item()), 1)
@@ -159,7 +230,11 @@ def _episode_row(
         "contact_x": contact_x,
         "contact_z": contact_z,
         "control_semantics": (
-            "open_loop" if controller in {"settle", "straight"} else "contact_triggered"
+            "open_loop"
+            if controller in {"settle", "straight"}
+            else "force_feedback"
+            if controller in {"forcelim", "stall"}
+            else "contact_triggered"
         ),
         "reason": _reason(env, env_id),
         "steps": episode_steps,
@@ -185,6 +260,7 @@ def _episode_row(
         "stuck_rate": float(stuck_steps[env_id].item()) / episode_steps,
         "stop_rate": float(stop_steps[env_id].item()) / episode_steps,
         "retreat_rate": float(retreat_steps[env_id].item()) / episode_steps,
+        **(extra or {}),
     }
 
 
@@ -205,6 +281,12 @@ def _run_batch(
     retreat_steps: int,
     contact_x: float,
     contact_z: float,
+    settle_steps: int = 0,
+    force_limit: float = 5.0,
+    stall_force: float = 2.0,
+    stall_eps: float = 0.001,
+    stall_window: int = 20,
+    stall_retreat_steps: int = 100,
 ) -> list[dict]:
     cfg.FORCED_MISSING_PATTERN_OFFSET = batch_index * env.num_envs
     reset_seed = evaluation_seed(base_seed, batch_index)
@@ -226,12 +308,59 @@ def _run_batch(
     stuck_steps = torch.zeros(env.num_envs, device=env.device)
     stop_steps = torch.zeros(env.num_envs, device=env.device)
     retreat_action_steps = torch.zeros(env.num_envs, device=env.device)
+    # Feedback controllers: previous-step contact force, and the stall detector's state.
+    last_force = torch.zeros(env.num_envs, device=env.device)
+    stalled = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    stall_age = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    stall_hist = torch.zeros(env.num_envs, stall_window + 1, device=env.device)
+    stall_hist_count = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    # Only used with a settling period, where success no longer ends the episode: the
+    # step at which success was first reached (-1 before). From the next step on the push
+    # command is zero while the contact point stays, until the tower is judged again
+    # settle_steps later.
+    success_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+    parameter_columns = {
+        "force_limit": force_limit,
+        "stall_force": stall_force,
+        "stall_eps": stall_eps,
+        "stall_window": stall_window,
+        "stall_retreat_steps": stall_retreat_steps,
+    }
     rows: list[dict] = []
 
-    for _ in range(max_steps):
+    def settle_extra(env_id: int, settled: bool) -> dict:
+        extra = dict(parameter_columns)
+        if settle_steps <= 0:
+            return extra
+        reached = int(success_step[env_id].item()) >= 0
+        extra.update(
+            {
+                "settle_steps": settle_steps,
+                "success_step": int(success_step[env_id].item()),
+                "reached_success": reached,
+                "safe_after_settle": settled
+                and bool(cfg.success_block_extract(env)[env_id].item()),
+                "damaged_after_success": reached
+                and bool(cfg.tower_damage_signal(env)[env_id].item()),
+            }
+        )
+        return extra
+
+    for _ in range(max_steps + settle_steps):
         live = active & ~finished
         if not bool(live.any().item()):
             break
+        if controller == "stall":
+            _stall_update(
+                stalled=stalled,
+                hist=stall_hist,
+                hist_count=stall_hist_count,
+                live=live,
+                force=last_force,
+                stall_force=stall_force,
+                stall_eps=stall_eps,
+                stall_window=stall_window,
+            )
         action = _actions(
             controller,
             num_envs=env.num_envs,
@@ -245,7 +374,15 @@ def _run_batch(
             contact_x=contact_x,
             contact_z=contact_z,
             device=env.device,
+            force=last_force,
+            stalled=stalled,
+            stall_age=stall_age,
+            force_limit=force_limit,
+            stall_retreat_steps=stall_retreat_steps,
         )
+        if settle_steps > 0:
+            # Stop pushing after success but keep the contact point (columns 1 and 2).
+            action[success_step >= 0, 0] = 0.0
         _, _, terminated, truncated, _ = env.step(action)
         dones = terminated | truncated
 
@@ -272,8 +409,46 @@ def _run_batch(
         contact_seen[live] |= contact[live] > 0.0
         contact_age[live & was_seen] += 1
 
-        first_done = torch.nonzero(dones & live, as_tuple=False).squeeze(-1)
+        last_force = force
+        if controller == "stall":
+            # Count only from first contact on; the age of a declared stall grows after
+            # the action of this step was chosen.
+            _stall_record(
+                hist=stall_hist,
+                hist_count=stall_hist_count,
+                mask=live & contact_seen,
+                progress=progress,
+            )
+            stall_age[live & stalled] += 1
+
+        ended = dones
+        settled = torch.zeros_like(live)
+        expired = torch.zeros_like(live)
+        if settle_steps > 0:
+            # A success after the regular step cap would not have counted without the
+            # extension, so it does not count here either.
+            reached_now = (
+                cfg.success_block_extract(env)
+                & live
+                & (success_step < 0)
+                & (steps <= max_steps)
+            )
+            success_step[reached_now] = steps[reached_now].long()
+            elapsed = steps.long() - success_step
+            settled = live & (success_step >= 0) & (elapsed >= settle_steps) & ~ended
+            # The regular time limit, which the extended episode no longer enforces.
+            expired = live & (success_step < 0) & (steps >= max_steps) & ~ended
+
+        first_done = torch.nonzero(
+            (ended | settled | expired) & live, as_tuple=False
+        ).squeeze(-1)
         for env_id in first_done.tolist():
+            is_settled = bool(settled[env_id].item())
+            extra = settle_extra(env_id, is_settled)
+            if is_settled:
+                extra["reason"] = "settled"
+            elif bool(expired[env_id].item()):
+                extra["reason"] = "timeout"
             rows.append(
                 _episode_row(
                     env=env,
@@ -303,6 +478,7 @@ def _run_batch(
                     retreat_phase_steps=retreat_steps,
                     contact_x=contact_x,
                     contact_z=contact_z,
+                    extra=extra,
                 )
             )
         finished[first_done] = True
@@ -341,6 +517,7 @@ def _run_batch(
             retreat_phase_steps=retreat_steps,
             contact_x=contact_x,
             contact_z=contact_z,
+            extra=settle_extra(env_id, settled=False),
         )
         row["reason"] = "step_cap"
         rows.append(row)
@@ -366,6 +543,12 @@ def _evaluate_case(
     retreat_steps: int,
     contact_x: float,
     contact_z: float,
+    settle_steps: int = 0,
+    force_limit: float = 5.0,
+    stall_force: float = 2.0,
+    stall_eps: float = 0.001,
+    stall_window: int = 20,
+    stall_retreat_steps: int = 100,
 ) -> list[dict]:
     configure_evaluation_case(cfg, target, missing_level)
     vector_size = min(num_envs, episodes_per_seed)
@@ -374,6 +557,16 @@ def _evaluate_case(
     env_cfg.auto_reset = False
     env_cfg.observations["actor"].enable_corruption = False
     env_cfg.commands["target_block"].force_target_name = target
+    if settle_steps > 0:
+        # Success must not end the episode, or there is nothing left to observe. The
+        # loop detects success itself and judges the tower again after settle_steps.
+        # Damage stays a termination, so a collapse during settling is still recorded.
+        env_cfg.terminations.pop("success", None)
+        # Room for a success on the last regular step to finish settling. The loop
+        # enforces the regular limit itself, so the environment's own limit must never
+        # fire first; one spare step covers rounding in the step count.
+        step_dt = env_cfg.decimation * env_cfg.sim.mujoco.timestep
+        env_cfg.episode_length_s += (settle_steps + 1) * step_dt
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=None)
     commit = git_commit()
     rows: list[dict] = []
@@ -400,6 +593,12 @@ def _evaluate_case(
                         retreat_steps=retreat_steps,
                         contact_x=contact_x,
                         contact_z=contact_z,
+                        settle_steps=settle_steps,
+                        force_limit=force_limit,
+                        stall_force=stall_force,
+                        stall_eps=stall_eps,
+                        stall_window=stall_window,
+                        stall_retreat_steps=stall_retreat_steps,
                     )
                 )
                 remaining -= active_count
@@ -414,7 +613,12 @@ def _evaluate_case(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--controllers", default=",".join(CONTROLLERS))
+    parser.add_argument(
+        "--controllers",
+        default="settle,straight,pulsed,tap",
+        help=f"Comma-separated, from {','.join(CONTROLLERS)}. The default is the original "
+        "four; forcelim and stall must be requested.",
+    )
     parser.add_argument("--targets", default="trained")
     parser.add_argument("--missing-levels", type=int, nargs="+", default=[0, 1, 2, 3])
     parser.add_argument(
@@ -432,6 +636,57 @@ def main() -> None:
     parser.add_argument("--retreat-steps", type=int, default=5)
     parser.add_argument("--contact-x", type=float, default=0.0)
     parser.add_argument("--contact-z", type=float, default=0.0)
+    parser.add_argument(
+        "--settle-steps",
+        type=int,
+        default=0,
+        help="Control steps (100 Hz, so 200 = 2 s) to keep simulating after success "
+        "before judging the tower again. The push stops at success and the contact "
+        "point is held. success_rate then means safe after settling; "
+        "reached_success_rate is the rate at the moment of success. 0 keeps the regular "
+        "protocol.",
+    )
+    parser.add_argument(
+        "--force-limit",
+        type=float,
+        default=5.0,
+        help="forcelim: contact force in N above which the push command is scaled by "
+        "limit/force. Default 5.0.",
+    )
+    parser.add_argument(
+        "--stall-force",
+        type=float,
+        default=2.0,
+        help="stall: contact force in N that must be exceeded for a stall (default 2.0, "
+        "the threshold of the stuck-contact reward term).",
+    )
+    parser.add_argument(
+        "--stall-eps",
+        type=float,
+        default=0.001,
+        help="stall: minimum target progress in m over the window; less counts as no "
+        "progress. Default 0.001.",
+    )
+    parser.add_argument(
+        "--stall-window",
+        type=int,
+        default=20,
+        help="stall: window in control steps, counted from first contact (default 20, "
+        "the grace period of the stuck-contact reward term).",
+    )
+    parser.add_argument(
+        "--stall-retreat-steps",
+        type=int,
+        default=100,
+        help="stall: steps of full retreat after a stall is declared; the controller "
+        "then holds still. Default 100 (1 s).",
+    )
+    parser.add_argument(
+        "--friction-range",
+        help="LO,HI: sliding-friction range sampled per block at every reset, replacing "
+        "the configured range. Set before the environment is created; the value is "
+        "written to friction_sliding_min/max.",
+    )
     parser.add_argument("--device", default="cuda:0" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--episodes-csv")
     parser.add_argument("--summary-csv")
@@ -453,11 +708,27 @@ def main() -> None:
         parser.error("contact-x and contact-z must be in [-1, 1]")
     if any(level < 0 or level > 3 for level in args.missing_levels):
         parser.error("missing levels must be between 0 and 3")
+    if args.settle_steps < 0:
+        parser.error("settle-steps must not be negative")
+    if args.force_limit <= 0 or args.stall_force < 0 or args.stall_eps < 0:
+        parser.error("force-limit must be positive; stall-force and stall-eps non-negative")
+    if args.stall_window <= 0 or args.stall_retreat_steps < 0:
+        parser.error("stall-window must be positive; stall-retreat-steps non-negative")
+    friction_range = None
+    if args.friction_range is not None:
+        try:
+            friction_range = parse_float_range(args.friction_range)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     cfg.apply_low_level_stage("target")
     cfg.SUCCESS_CURRICULUM_START = cfg.SUCCESS_CURRICULUM_END
     cfg.YAW_CURRICULUM_START = 0.0
     cfg.YAW_CURRICULUM_END = 0.0
+    if friction_range is not None:
+        # randomize_block_physics reads this module constant at every reset, so setting
+        # it before the environment is created is enough.
+        cfg.RESET_FRICTION_SLIDING_RANGE = friction_range
     try:
         target_set, targets = resolve_targets(args.targets, cfg)
         seeds = parse_int_csv(args.seeds)
@@ -488,6 +759,12 @@ def main() -> None:
                     retreat_steps=args.retreat_steps,
                     contact_x=args.contact_x,
                     contact_z=args.contact_z,
+                    settle_steps=args.settle_steps,
+                    force_limit=args.force_limit,
+                    stall_force=args.stall_force,
+                    stall_eps=args.stall_eps,
+                    stall_window=args.stall_window,
+                    stall_retreat_steps=args.stall_retreat_steps,
                 )
                 summary = summarize_episode_rows(rows)
                 append_rows(args.episodes_csv, rows)
@@ -497,7 +774,13 @@ def main() -> None:
                     f"n={summary['episodes']} success={summary['success_rate']:.3f} "
                     f"damage={summary['tower_damage_rate']:.3f} "
                     f"progress={summary['progress_max_mean']:.4f} "
-                    f"steps={summary['episode_length_mean']:.1f}",
+                    f"steps={summary['episode_length_mean']:.1f}"
+                    + (
+                        f" reached={summary['reached_success_rate']:.3f} "
+                        f"damaged_after={summary['damaged_after_success_rate']:.3f}"
+                        if args.settle_steps > 0
+                        else ""
+                    ),
                     flush=True,
                 )
 
