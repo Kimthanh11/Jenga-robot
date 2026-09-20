@@ -7,7 +7,8 @@ imports rewritten to `mjlab_jenga_paper`). It is intentionally separate from `mj
 
 - `mjlab_jenga_paper/`: `jenga_mjenv_cfg.py`, `evaluation_utils.py`, empty `__init__.py`.
 - `paper_eval/scripts/`: `evaluate_low_level.py` (policy), `evaluate_scripted_baselines.py`
-  (settle, straight, pulsed, tap), `compare_conditions.py` and `analyze_evaluation.py` (CSV only; also `analyze_evaluation.py <episode csvs>`).
+  (settle, straight, pulsed, tap, forcelim, stall), `compare_conditions.py`, `analyze_evaluation.py` and
+  `analyze_failure_modes.py` (the last three read episode CSVs only).
 - `paper_eval/slurm/`: sbatch wrappers; `REPO_DIR` defaults to the timur side clone, output to `logs/paper_eval/`.
 - `checkpoints/jenga_low_level_missing3_noyaw_model_8500.pt`: reported checkpoint, sha256 270a9676... (`--abort` needs `jenga_abort_cfg.py`, not vendored).
 
@@ -20,3 +21,14 @@ Run from the repo root in an environment with mjlab:
 Cluster: `mkdir -p logs/paper_eval` in the side clone, submit from it with
 `sbatch paper_eval/slurm/evaluate_low_level.sbatch <checkpoint> <targets> <levels> <episodes> <num_envs>`
 (positional arguments are documented in each sbatch header). Tests: `python -m unittest discover -s paper_eval/tests`.
+
+Options (defaults leave earlier behaviour unchanged; 100 Hz control, so 200 steps = 2 s):
+- `--settle-steps N` (both evaluation scripts): stop pushing at success, keep simulating N steps, judge the tower again.
+  Adds `settle_steps`, `success_step`, `reached_success`, `safe_after_settle`, `damaged_after_success` columns.
+- `--friction-range LO,HI` (both): replaces the sliding-friction sampling range; recorded in `friction_sliding_min/max`.
+- Baseline `forcelim`: full push, command scaled by `--force-limit`/force (default 5.0 N) when the contact force exceeds it.
+- Baseline `stall`: full push; from first contact, a stall is contact force > `--stall-force` (2.0 N) with target progress
+  gain < `--stall-eps` (0.001 m) over `--stall-window` (20) steps; then retreat `--stall-retreat-steps` (100) steps and hold.
+- `analyze_failure_modes.py <csv or glob>... [--layers 6,7,8]`: outcome shares, exceeded damage limits (xy > 25 mm, z > 15 mm,
+  rot > 15 deg, in metres and degrees as logged) and timeouts with or without extraction.
+- sbatch: positional `SETTLE` and `FRICTION` (low-level: 13, 14; array: 9, 10; baselines: 13, 14), `EXTRA_ARGS` for baselines.
