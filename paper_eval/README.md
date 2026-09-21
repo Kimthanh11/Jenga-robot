@@ -22,6 +22,7 @@ Run from the repo root in an environment with mjlab:
 Cluster: `mkdir -p logs/paper_eval` in the side clone, submit from it with
 `sbatch paper_eval/slurm/evaluate_low_level.sbatch <checkpoint> <targets> <levels> <episodes> <num_envs>`
 (positional arguments are documented in each sbatch header). Tests: `python -m unittest discover -s paper_eval/tests`.
+Always write to a fresh --episodes-csv: baseline rows now carry the controller-parameter columns, and append_rows only writes a header for a new file, so appending to a CSV from an older commit yields a misaligned file.
 
 Options (defaults leave earlier behaviour unchanged; 100 Hz control, so 200 steps = 2 s):
 - `--settle-steps N` (both evaluation scripts): stop pushing at success, keep simulating N steps, judge the tower again.

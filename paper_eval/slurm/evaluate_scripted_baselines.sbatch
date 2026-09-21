@@ -85,6 +85,11 @@ export WANDB_MODE=disabled
 export WANDB_DISABLED=true
 export MUJOCO_GL=egl
 
+# --settle-steps only when requested, as in the policy sbatch files (the ${arr[@]+...} form
+# keeps an empty array valid under set -u in older bash).
+SETTLE_ARGS=()
+if [ "${SETTLE}" != "0" ]; then SETTLE_ARGS=(--settle-steps "${SETTLE}"); fi
+
 PYTHONUNBUFFERED=1 "${VENV_PY}" paper_eval/scripts/evaluate_scripted_baselines.py \
   --controllers "${CONTROLLERS}" \
   --targets "${TARGETS}" \
@@ -99,7 +104,7 @@ PYTHONUNBUFFERED=1 "${VENV_PY}" paper_eval/scripts/evaluate_scripted_baselines.p
   --contact-x "${CONTACT_X}" \
   --contact-z "${CONTACT_Z}" \
   --device cuda:0 \
-  --settle-steps "${SETTLE}" \
+  ${SETTLE_ARGS[@]+"${SETTLE_ARGS[@]}"} \
   ${FRICTION:+--friction-range "${FRICTION}"} \
   --episodes-csv "${EPISODES_OUT}" \
   --summary-csv "${SUMMARY_OUT}" \

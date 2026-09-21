@@ -7,6 +7,7 @@ For every controller (or every input file with --by-file) the report gives the s
 episodes ending in success, damage and timeout; among damaged episodes which damage limits
 were exceeded (each combination of horizontal, vertical and rotation) with the median of
 each maximum displacement; and among timeouts whether the extraction distance was reached.
+Anything else counts as other: a non-timeout termination, or, in a settling run, an episode that settled without being safe.
 
 Units assumed, as written by evaluate_low_level.py and evaluate_scripted_baselines.py:
 tower_xy_max and tower_z_max in metres (compared with 0.025 m and 0.015 m, printed in mm),

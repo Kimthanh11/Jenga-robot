@@ -651,7 +651,8 @@ def main() -> None:
         type=float,
         default=5.0,
         help="forcelim: contact force in N above which the push command is scaled by "
-        "limit/force. Default 5.0.",
+        "limit/force. Default 5.0, a free parameter with no counterpart in the task "
+        "configuration.",
     )
     parser.add_argument(
         "--stall-force",
@@ -665,7 +666,8 @@ def main() -> None:
         type=float,
         default=0.001,
         help="stall: minimum target progress in m over the window; less counts as no "
-        "progress. Default 0.001.",
+        "progress. Default 0.001. This is a displacement over the window, not the reward "
+        "term's 0.002 m/s speed test, and at the default it is the looser of the two.",
     )
     parser.add_argument(
         "--stall-window",
