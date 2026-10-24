@@ -1,0 +1,120 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="jenga_tower_476">
+  <compiler angle="degree" coordinate="local" />
+  <option gravity="0 0 -9.81" timestep="0.002" iterations="200" solver="Newton" cone="pyramidal" impratio="30" />
+  <default>
+    <geom density="650" margin="0.0005" gap="0.0005" />
+  </default>
+  <worldbody>
+    <light diffuse=".5 .5 .5" pos="0 0 4" dir="0 0 -1" />
+    <geom type="plane" size="0.3 0.3 0.01" rgba="0.96 0.93 0.73 1" friction="0.8 0.001 0.0001" />
+    <body name="b1_1" pos="0.00145784 -0.000671709 0.0155" euler="0 0 -0.804659">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b2_1" pos="0.00173137 -0.00140591 0.046" euler="0 0 90.8399">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b2_2" pos="-0.00128419 0.0500301 0.046" euler="0 0 89.6067">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b2_3" pos="0.000386808 -0.0493485 0.046" euler="0 0 89.1815">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b3_1" pos="0.0513412 -0.000753388 0.0765" euler="0 0 0.615294">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b3_2" pos="-0.0526392 0.00104403 0.0765" euler="0 0 0.477699">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b4_1" pos="0.00172556 -0.00225802 0.107" euler="0 0 90.6802">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b4_2" pos="0.000617206 0.0528636 0.107" euler="0 0 90.4832">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b4_3" pos="-0.00158692 -0.0505736 0.107" euler="0 0 90.9578">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b5_1" pos="-0.0488758 0.00152558 0.1375" euler="0 0 0.202446">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b5_2" pos="0.00188542 0.00152518 0.1375" euler="0 0 -0.926745">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b5_3" pos="0.0522663 -0.000557124 0.1375" euler="0 0 0.798922">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b6_1" pos="-0.00164103 0.0526397 0.168" euler="0 0 89.4574">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b6_2" pos="0.000890359 -0.0521631 0.168" euler="0 0 90.8638">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b6_3" pos="-0.000615169 0.00168366 0.168" euler="0 0 89.7224">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b7_1" pos="0.00223659 0.000803171 0.1985" euler="0 0 0.0869955">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b7_2" pos="0.0523368 0.00194493 0.1985" euler="0 0 -0.930757">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b8_1" pos="0.00126432 -0.0497213 0.229" euler="0 0 90.4984">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b8_2" pos="0.00207553 0.00102584 0.229" euler="0 0 89.6933">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b8_3" pos="-0.000302451 0.0512028 0.229" euler="0 0 90.9775">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b9_1" pos="-0.00170865 -0.00117324 0.2595" euler="0 0 -0.166696">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b10_1" pos="-0.00133876 -0.0488735 0.29" euler="0 0 90.0834">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b10_2" pos="-0.00215646 0.0491368 0.29" euler="0 0 90.9265">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b10_3" pos="-0.00214138 0.00115016 0.29" euler="0 0 89.7927">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b11_1" pos="-0.0483081 -4.75741e-05 0.3205" euler="0 0 0.600298">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b11_2" pos="-0.00117366 -0.00222922 0.3205" euler="0 0 -0.447896">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+    <body name="b12_1" pos="0.00123708 0.0524788 0.351" euler="0 0 89.7463">
+      <joint type="free" />
+      <geom type="box" size="0.025 0.075 0.015" rgba="0.68 0.85 0.90 1" friction="0.32 0.04 0.001" />
+    </body>
+  </worldbody>
+</mujoco>
