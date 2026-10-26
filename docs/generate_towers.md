@@ -9,10 +9,8 @@ This project generates 50,000 Jenga towers, stores them in a CSV dataset, trains
 | `generate_towers.py` | Generates 50,000 towers with 50% stable and 50% unstable configurations. |
 | `towers_dataset.csv` | Stores tower positions, stability labels, and CoM. Each tower has a unique `Tower_ID`. |
 | `train_jenga_cnn.py` | Trains a 1D CNN using PyTorch to predict stability and CoM. |
-| `jenga_cnn.pth` | Saved trained CNN model. |
-| `jenga_test_predictions.csv` | CNN predictions on the test dataset. |
-| `test_jenga_cnn.py` | Evaluates the trained CNN on 10,000 independently generated random towers. |
-| `jenga_random_test_predictions.csv` | Predictions from the independent random test. |
+| `jenga_cnn.pth` | Saved trained CNN model. | |
+| `test_jenga_cnn.py` | Evaluates the trained CNN on 10,000 independently generated random towers. | |
 | `generate_xml.py` | Converts a selected tower from the CSV into a MuJoCo XML scene. |
 | `jenga_test.xml` | Generated MuJoCo scene for the selected tower. |
 
@@ -83,7 +81,6 @@ The CNN correctly identified 516 out of 534 stable towers in the random test.
 
 Predictions are saved in `jenga_random_test_predictions.csv`.
 
-### 4. Choose a tower
 
 Open `towers_dataset.csv` and choose the `Tower_ID` you want to test in MuJoCo.
 
@@ -103,17 +100,4 @@ Open `jenga_test.xml` in MuJoCo or use it as input to a MuJoCo test script.
 
 The XML contains only the selected tower, not all 50,000 towers.
 
-## Notes
 
-- If you change the selected `Tower_ID`, run `generate_xml.py` again.
-- Make sure the scripts point to the correct CSV and model files.
-- The dataset stability labels are based on a geometric approximation, not a full physics simulation.
-- Actual stability in MuJoCo depends on contact forces, friction, gravity, and simulation duration.
-- The pretrained CNN can later be used as a feature extractor for the Jenga reinforcement learning policy.
-
-## Next Steps
-
-- Try increasing the dataset to 100,000 towers.
-- Reduce false-stable predictions.
-- Compare CNN stability predictions with MuJoCo simulation results.
-- Integrate the pretrained CNN into the PPO training pipeline.
