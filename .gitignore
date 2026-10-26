@@ -8,3 +8,7 @@ logs/
 wandb/
 *.pt
 *.tfevents*
+jenga_random_test_predictions.csv
+jenga_test_predictions.csv
+towers_dataset.csv
+jenga_cnn.pth

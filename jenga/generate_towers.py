@@ -12,29 +12,65 @@ OUTPUT_FILE = "towers_dataset.csv"
 MAX_LAYERS = 27
 
 # Generate one tower with exactly 27 blocks and 1–3 blocks per layer.
-def generate_tower(number_blocks=NUMBER_BLOCKS):
+
+def generate_tower(number_blocks=NUMBER_BLOCKS, mode="random"):
     remaining = number_blocks
     blocks_per_layer = []
 
     while remaining > 0:
-        count = random.randint(1, min(3, remaining))
+        max_count = min(3, remaining)
+        choices = list(range(1, max_count + 1))
+
+        if mode == "compact":
+            weights = [1, 3, 6][:max_count]
+            count = random.choices(choices, weights=weights)[0]
+
+        elif mode == "sparse":
+            weights = [6, 3, 1][:max_count]
+            count = random.choices(choices, weights=weights)[0]
+
+        else:
+            count = random.choice(choices)
+
         blocks_per_layer.append(count)
         remaining -= count
 
     blocks = []
 
-    # Create the block coordinates for each layer.
     for layer_index, count in enumerate(blocks_per_layer):
         layer = layer_index + 1
         z = 0.0155 + layer_index * 0.0305
         yaw = 0 if layer_index % 2 == 0 else 90
 
         if yaw == 0:
-            positions = [(-0.0505, 0), (0, 0), (0.0505, 0)]
+            positions = [
+                (-0.0505, 0),
+                (0, 0),
+                (0.0505, 0)
+            ]
         else:
-            positions = [(0, 0.0505), (0, 0), (0, -0.0505)]
+            positions = [
+                (0, 0.0505),
+                (0, 0),
+                (0, -0.0505)
+            ]
 
-        chosen_positions = random.sample(positions, count)
+        # All modes can produce asymmetric configurations.
+        if mode == "compact":
+            if count == 1:
+                chosen_positions = random.choices(
+                    positions, weights=[1, 4, 1], k=1
+                )
+            elif count == 2:
+                chosen_positions = (
+                    [positions[0], positions[2]]
+                    if random.random() < 0.6
+                    else random.sample(positions, 2)
+                )
+            else:
+                chosen_positions = positions.copy()
+        else:
+            chosen_positions = random.sample(positions, count)
 
         for slot, (x, y) in enumerate(chosen_positions, start=1):
             blocks.append({
@@ -47,7 +83,6 @@ def generate_tower(number_blocks=NUMBER_BLOCKS):
             })
 
     return blocks, blocks_per_layer
-
 
 def center_of_mass(blocks):
     """Calculate the center of mass, assuming all blocks have equal mass."""
@@ -165,125 +200,6 @@ def is_stable(blocks):
 
     return True
 
-# def simulate_stability(
-#     blocks,
-#     seconds=20.0,
-#     check_interval=3.0,
-#     max_horizontal_movement=0.01,
-#     max_vertical_movement=0.015,
-#     max_rotation_degrees=15.0,
-# ):
-#     """Return True if the tower stays within the movement thresholds."""
-#     root = ET.Element("mujoco", model="jenga_test")
-#     ET.SubElement(root, "compiler", angle="degree", coordinate="local")
-#     ET.SubElement(
-#         root,
-#         "option",
-#         gravity="0 0 -9.81",
-#         timestep="0.002",
-#         iterations="200",
-#         solver="Newton",
-#         cone="pyramidal",
-#         impratio="30",
-#     )
-
-#     default = ET.SubElement(root, "default")
-#     ET.SubElement(
-#         default,
-#         "geom",
-#         density="650",
-#         margin="0.0005",
-#         gap="0.0005",
-#     )
-
-#     world = ET.SubElement(root, "worldbody")
-#     ET.SubElement(world, "light", pos="0 0 4", dir="0 0 -1")
-
-#     ET.SubElement(
-#         world,
-#         "geom",
-#         name="floor",
-#         type="plane",
-#         size="0.3 0.3 0.01",
-#         friction="0.8 0.001 0.0001",
-#     )
-
-#     for block in blocks:
-#         name = f"b{block['layer']}_{block['slot']}"
-#         body = ET.SubElement(
-#             world,
-#             "body",
-#             name=name,
-#             pos=f"{block['x']} {block['y']} {block['z']}",
-#             euler=f"0 0 {block['yaw']}",
-#         )
-#         ET.SubElement(body, "joint", type="free")
-#         ET.SubElement(
-#             body,
-#             "geom",
-#             type="box",
-#             size="0.025 0.075 0.015",
-#             friction="0.32 0.04 0.001",
-#         )
-
-#     xml_string = ET.tostring(root, encoding="unicode")
-#     model = mujoco.MjModel.from_xml_string(xml_string)
-#     data = mujoco.MjData(model)
-
-#     mujoco.mj_forward(model, data)
-
-#     body_ids = {}
-#     initial_poses = {}
-
-#     for block in blocks:
-#         name = f"b{block['layer']}_{block['slot']}"
-#         body_id = mujoco.mj_name2id(
-#             model, mujoco.mjtObj.mjOBJ_BODY, name
-#         )
-#         body_ids[name] = body_id
-#         initial_poses[name] = (
-#             data.xpos[body_id].copy(),
-#             data.xquat[body_id].copy(),
-#         )
-
-#     total_steps = round(seconds / model.opt.timestep)
-#     steps_per_check = max(
-#         1, round(check_interval / model.opt.timestep)
-#     )
-#     max_rotation = math.radians(max_rotation_degrees)
-
-#     for start_step in range(0, total_steps, steps_per_check):
-#         steps = min(steps_per_check, total_steps - start_step)
-#         mujoco.mj_step(model, data, nstep=steps)
-#         mujoco.mj_forward(model, data)
-
-#         for name, body_id in body_ids.items():
-#             initial_pos, initial_quat = initial_poses[name]
-#             current_pos = data.xpos[body_id]
-#             current_quat = data.xquat[body_id]
-
-#             horizontal_movement = math.hypot(
-#                 current_pos[0] - initial_pos[0],
-#                 current_pos[1] - initial_pos[1],
-#             )
-#             vertical_movement = abs(current_pos[2] - initial_pos[2])
-
-#             quat_dot = abs(sum(
-#                 initial_quat[i] * current_quat[i]
-#                 for i in range(4)
-#             ))
-#             quat_dot = min(1.0, max(-1.0, quat_dot))
-#             rotation = 2 * math.acos(quat_dot)
-
-#             if (
-#                 horizontal_movement > max_horizontal_movement
-#                 or vertical_movement > max_vertical_movement
-#                 or rotation > max_rotation
-#             ):
-#                 return False
-
-#     return True
-
 def tower_to_row(tower_id, blocks, blocks_per_layer):
     """Create one CSV row for a tower."""
     row = {"Tower_ID": tower_id}
@@ -304,26 +220,87 @@ def tower_to_row(tower_id, blocks, blocks_per_layer):
     row["CoM"] = json.dumps(center_of_mass(blocks))
     return row
 
+def generate_dataset(
+    number_towers=NUMBER_TOWERS,
+    output_file=OUTPUT_FILE,
+    stable_ratio=0.5
+):
+    target_stable = round(number_towers * stable_ratio)
+    target_unstable = number_towers - target_stable
 
-def generate_dataset(number_towers=NUMBER_TOWERS, output_file=OUTPUT_FILE):
-    """Generate the dataset and write it to a CSV file."""
+    stable_count = 0
+    unstable_count = 0
+    attempts = 0
+
     fieldnames = (
         ["Tower_ID"]
         + [f"Layer_{layer}" for layer in range(1, MAX_LAYERS + 1)]
-        # + ["Stable", "Stable_10s", "CoM"]
         + ["Stable", "CoM"]
     )
 
-    with open(output_file, "w", newline="", encoding="utf-8") as file:
+    modes = ["random", "compact", "sparse"]
+    mode_weights = [0.5, 0.35, 0.15]
+
+    # Keep rows in memory so we can shuffle before writing.
+    rows = []
+
+    while (
+        stable_count < target_stable
+        or unstable_count < target_unstable
+    ):
+        attempts += 1
+
+        mode = random.choices(
+            modes,
+            weights=mode_weights,
+            k=1
+        )[0]
+
+        blocks, blocks_per_layer = generate_tower(mode=mode)
+        stable = int(is_stable(blocks))
+
+        if stable == 1:
+            if stable_count >= target_stable:
+                continue
+            stable_count += 1
+        else:
+            if unstable_count >= target_unstable:
+                continue
+            unstable_count += 1
+
+        row = tower_to_row(
+            len(rows) + 1,
+            blocks,
+            blocks_per_layer
+        )
+
+        rows.append(row)
+
+        if len(rows) % 1000 == 0:
+            print(
+                f"Generated: {len(rows)}/{number_towers} | "
+                f"Stable: {stable_count} | "
+                f"Unstable: {unstable_count} | "
+                f"Attempts: {attempts}"
+            )
+
+    # Shuffle rows, preserving labels and coordinates together.
+    random.shuffle(rows)
+
+    with open(
+        output_file, "w", newline="", encoding="utf-8"
+    ) as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
 
-        for tower_id in range(1, number_towers + 1):
-            blocks, blocks_per_layer = generate_tower()
-            row = tower_to_row(tower_id, blocks, blocks_per_layer)
+        for tower_id, row in enumerate(rows, start=1):
+            row["Tower_ID"] = tower_id
             writer.writerow(row)
 
-    print(f"Generated {number_towers} towers in {output_file}")
+    print("\nDataset completed!")
+    print("Stable:", stable_count)
+    print("Unstable:", unstable_count)
+    print("Total attempts:", attempts)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 
 INPUT_FILE = "towers_dataset.csv"
 OUTPUT_FILE = "jenga_test.xml"
-TOWER_ID = 476 # Change this to select another tower
+TOWER_ID = 40000 # Change this to select another tower
 
 BLOCK_SIZE = (0.05, 0.15, 0.03)  # Full dimensions in metres
 PLANE_SIZE = (0.3, 0.3, 0.01)
