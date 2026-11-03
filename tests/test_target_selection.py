@@ -11,13 +11,25 @@ if HAS_RUNTIME:
 
 @unittest.skipUnless(HAS_RUNTIME, "requires the mjlab training environment")
 class TargetSelectionTest(unittest.TestCase):
-    def make_command(self, targets=("b2_1", "b8_2"), **kwargs):
+    def make_command(self, targets=("b2_1", "b8_2"), num_envs=128, **kwargs):
         names, _ = cfg._target_block_entries()
         hook = Mock()
         hook.find_joints.return_value = ([0, 1, 2, 3], [])
         scene = {name: Mock() for name in names}
+        for block in scene.values():
+            block.data.body_link_pos_w = torch.zeros(num_envs, 1, 3)
+            block.data.body_link_vel_w = torch.zeros(num_envs, 1, 6)
+            block.data.body_link_pose_w = torch.zeros(num_envs, 1, 7)
+            block.data.body_link_pose_w[:, :, 3] = 1.0
         scene["hook"] = hook
-        env = SimpleNamespace(scene=scene, num_envs=128, device="cpu", common_step_counter=0)
+        env = SimpleNamespace(
+            scene=scene,
+            sim=Mock(),
+            observation_manager=SimpleNamespace(_obs_buffer=object()),
+            num_envs=num_envs,
+            device="cpu",
+            common_step_counter=0,
+        )
         command_cfg = cfg.TargetBlockCommandCfg(
             resampling_time_range=(1e9, 1e9), selectable_target_names=targets, **kwargs
         )
@@ -87,6 +99,56 @@ class TargetSelectionTest(unittest.TestCase):
         torch.manual_seed(22)
         self.sample(command)
         self.assertTrue(torch.equal(command.selected_block_idx, expected))
+
+    def test_sequential_play_can_remove_any_tower_block(self):
+        _, env = self.make_command()
+        block_name = "b2_1"
+        asset = env.scene[block_name]
+        asset.data.default_root_state = torch.zeros(env.num_envs, 13)
+        env_ids = torch.tensor([1, 3], dtype=torch.long)
+
+        cfg.remove_block_from_tower(env, block_name, env_ids=env_ids)
+
+        missing = cfg.current_missing_block_mask(env, block_name)
+        self.assertTrue(torch.equal(torch.nonzero(missing).flatten(), env_ids))
+        parked_state = asset.write_root_state_to_sim.call_args.args[0]
+        self.assertTrue(torch.all(parked_state[:, :3] != 0.0))
+        self.assertTrue(torch.equal(parked_state[:, 7:], torch.zeros(2, 6)))
+        self.assertTrue(
+            torch.equal(asset.write_root_state_to_sim.call_args.kwargs["env_ids"], env_ids)
+        )
+        env.sim.forward.assert_called_once_with()
+
+    def test_target_change_refreshes_cached_metrics(self):
+        command, env = self.make_command()
+        with patch.object(command, "_update_metrics") as update:
+            command.set_target_block("b2_1")
+        update.assert_called_once_with()
+        self.assertIsNone(env.observation_manager._obs_buffer)
+
+    def test_rebaseline_and_restore_pristine_reference(self):
+        command, _ = self.make_command(num_envs=1)
+        original = command._start_pos.clone()
+        for index, block in enumerate(command._blocks):
+            block.data.body_link_pos_w[0, 0] = torch.tensor(
+                [index * 0.01, index * 0.02, index * 0.03]
+            )
+
+        command.rebaseline()
+        expected = torch.stack(
+            [block.data.body_link_pos_w[0, 0] for block in command._blocks]
+        )
+        self.assertTrue(torch.equal(command._start_pos, expected))
+
+        command.restore_pristine_reference()
+        self.assertTrue(torch.equal(command._start_pos, original))
+
+    def test_absolute_tower_state_does_not_depend_on_selected_target(self):
+        command, _ = self.make_command(num_envs=1)
+        before = command.absolute_tower_state()
+        command.set_target_block("b8_2")
+        after = command.absolute_tower_state()
+        self.assertEqual(before, after)
 
     def test_empty_and_unknown_targets_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "at least one selectable"):
