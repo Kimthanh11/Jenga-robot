@@ -150,6 +150,23 @@ class TargetSelectionTest(unittest.TestCase):
         after = command.absolute_tower_state()
         self.assertEqual(before, after)
 
+    def test_absolute_tower_state_tensor_has_environment_block_feature_axes(self):
+        command, env = self.make_command(num_envs=2)
+        block_name = "b2_1"
+        env.scene[block_name].data.default_root_state = torch.zeros(2, 13)
+        cfg.remove_block_from_tower(
+            env,
+            block_name,
+            env_ids=torch.tensor([1], dtype=torch.long),
+        )
+
+        state = command.absolute_tower_state_tensor()
+
+        block_index = command._all_names.index(block_name)
+        self.assertEqual(state.shape, (2, len(command._all_names), 14))
+        self.assertEqual(state[0, block_index, -1].item(), 1.0)
+        self.assertEqual(state[1, block_index, -1].item(), 0.0)
+
     def test_empty_and_unknown_targets_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "at least one selectable"):
             self.make_command(targets=())

@@ -601,6 +601,23 @@ class TargetBlockCommand(CommandTerm):
             "present": present.detach().cpu().tolist(),
         }
 
+    def absolute_tower_state_tensor(self) -> torch.Tensor:
+        """Return action-independent per-block state as ``(env, block, feature)``."""
+        poses = torch.stack(
+            [block.data.body_link_pose_w[:, 0, :] for block in self._blocks],
+            dim=1,
+        )
+        velocities = torch.stack(
+            [block.data.body_link_vel_w[:, 0, :] for block in self._blocks],
+            dim=1,
+        )
+        present = self._present_by_block().unsqueeze(-1)
+        present = present.to(dtype=poses.dtype)
+
+        state = torch.cat((poses, velocities, present), dim=-1)
+
+        return state
+
     def _present_by_block(self) -> torch.Tensor:
         present = torch.ones(
             self.num_envs,
