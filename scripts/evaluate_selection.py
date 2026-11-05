@@ -4,18 +4,35 @@ import random
 from dataclasses import asdict
 from pathlib import Path
 
+import torch
+
 import mjlab_jenga.jenga_mjenv_cfg as jenga_cfg
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab_jenga.evaluation_utils import target_groups
 from mjlab_jenga.jenga_mjenv_cfg import (
+    TargetBlockCommand,
     jenga_env_cfg,
     jenga_ppo_runner_cfg,
     remove_block_from_tower,
+    success_block_extract,
+    tower_damage,
     tower_state_observation,
 )
-from mjlab_jenga.low_level_executor import extract_block, get_target_command
 from mjlab_jenga.selection import GameState, select_random_block
+
+
+def _action_column(env: ManagerBasedRlEnv, term_name: str) -> int:
+    """Return the first action column consumed by the named action term."""
+    manager = env.action_manager
+    return sum(manager.action_term_dim[: manager.active_terms.index(term_name)])
+
+
+def _target_command(env: ManagerBasedRlEnv) -> TargetBlockCommand:
+    command = env.command_manager.get_term("target_block")
+    if not isinstance(command, TargetBlockCommand):
+        raise TypeError("target_block has an unexpected command term type")
+    return command
 
 
 def _block_physics_snapshot(
@@ -54,6 +71,66 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     temporary.replace(path)
 
 
+def settle_after_success(
+    env: ManagerBasedRlEnv,
+    wrapped_env: RslRlVecEnvWrapper,
+    last_actions: torch.Tensor,
+    settle_steps: int,
+) -> str:
+    """Stop pushing and let the tower settle while holding contact point and yaw."""
+    hold_actions = last_actions.clone()
+    hold_actions[:, _action_column(env, "push_stop_retreat")] = 0.0
+
+    for _ in range(settle_steps):
+        wrapped_env.step(hold_actions)
+        if tower_damage(env)[0].item():
+            return "tower_damage"
+
+    if not success_block_extract(env)[0].item():
+        return "settle_failed"
+    return "success"
+
+
+def extract_block(
+    env: ManagerBasedRlEnv,
+    target_block: str,
+    wrapped_env: RslRlVecEnvWrapper,
+    policy,
+    settle_steps: int,
+    max_steps_per_block: int,
+):
+    # Set the already selected block as the policy target.
+    _target_command(env).set_target_block(target_block)
+
+    # Get observations.
+    obs = wrapped_env.get_observations()
+    reason = "step_cap"
+    steps = 0
+
+    for _ in range(max_steps_per_block):
+        with torch.no_grad():
+            actions = policy(obs)
+
+        obs, rewards, dones, extras = wrapped_env.step(actions)
+        steps += 1
+
+        # Registered success or damage terms would require a reset. Compute the same
+        # conditions directly so the incomplete tower can continue into the next move.
+        if success_block_extract(env)[0].item():
+            reason = settle_after_success(
+                env=env,
+                wrapped_env=wrapped_env,
+                last_actions=actions,
+                settle_steps=settle_steps,
+            )
+            break
+
+        elif tower_damage(env)[0].item():
+            reason = "tower_damage"
+            break
+
+    return target_block, reason, steps
+
 def gameloop(
     blocklist,
     env: ManagerBasedRlEnv,
@@ -66,7 +143,7 @@ def gameloop(
     max_attempts_per_block: int,
     max_moves_per_game: int | None,
 ):
-    target_command = get_target_command(env)
+    target_command = _target_command(env)
     target_command.restore_pristine_reference()
     blocklist_copy = blocklist.copy()
     gamestate = GameState(
@@ -185,7 +262,7 @@ def main(
     runner.load(path=checkpoint, load_cfg={"actor": True}, strict=True, map_location=device)
     policy = runner.get_inference_policy(device=device)
     legal_blocks = list(target_groups(jenga_cfg)["legal"])
-    command = get_target_command(env)
+    command = _target_command(env)
     game_records = []
     payload = {
         "schema_version": 1,
