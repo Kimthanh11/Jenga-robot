@@ -105,7 +105,6 @@ FORCED_MISSING_PATTERN_IDS: tuple[int, ...] | None = None
 FORCED_MISSING_PATTERN_OFFSET = 0
 MISSING_BLOCK_PARK_OFFSET = (1.5, 1.5, 0.5)
 MISSING_BLOCK_PARK_SPACING = 0.2
-PLAY_REMOVED_BLOCK_PARK_OFFSET = (1.5, -1.5, 0.5)
 RANDOM_TARGET_BLOCK_BEGIN_STEP = 0
 RANDOM_TARGET_BLOCK_RAMP_STEPS = 1
 RANDOM_TARGET_BLOCK_START_PROBABILITY = 1.0
@@ -115,21 +114,15 @@ RANDOM_TARGET_WITH_MISSING_RAMP_STEPS = 1
 RANDOM_TARGET_WITH_MISSING_START_PROBABILITY = 1.0
 RANDOM_TARGET_WITH_MISSING_END_PROBABILITY = 1.0
 FIXED_TARGET_BLOCK_NAME = "b6_1"
-# Default training targets. Only blocks below the highest completed story are legal
-# moves, so layer LAYERS is excluded; those blocks stay in the tower as the load that
-# makes the layer below them the hardest legal target.
-#
-# Until the generalization evaluation this tuple also held b9_1, b9_2 and b9_3. Besides
-# being illegal moves, they actively conflicted with layer 8: the normalized layer
-# feature puts the two layers next to each other while the mechanics are opposite,
-# because nothing rests on the top layer. Layer 8 scored 0 % safe success even though
-# layer 9 was trained. Reproducing the earlier checkpoint therefore needs an explicit
-# --targets b2_1,b2_2,b2_3,b3_1,b9_1,b9_2,b9_3 --allow-illegal-targets.
+# Targets that passed the scripted feasibility sweep.
 RANDOM_TARGET_BLOCK_NAMES = (
     "b2_1",
     "b2_2",
     "b2_3",
     "b3_1",
+    "b9_1",
+    "b9_2",
+    "b9_3",
 )
 HOOK_BASE_POS = (0.15, 0.05, 0.16)
 HOOK_TIP_LOCAL_X = -0.056
@@ -389,7 +382,6 @@ class TargetBlockCommand(CommandTerm):
             dtype=torch.float32,
             device=self.device,
         )
-        self._pristine_start_pos = self._start_pos.clone()
         self._start_quat = torch.tensor(
             [entry["start_quat"] for entry in entries],
             dtype=torch.float32,
@@ -452,7 +444,6 @@ class TargetBlockCommand(CommandTerm):
         )
 
         name_to_idx = {name: idx for idx, name in enumerate(names)}
-        self.name_to_idx = name_to_idx
         self._fixed_idx = name_to_idx[cfg.fixed_target_name]
         self._force_target_idx: int | None = None
         if cfg.force_target_name is not None:
@@ -471,10 +462,11 @@ class TargetBlockCommand(CommandTerm):
             self._force_target_per_env = torch.tensor(
                 cycled, dtype=torch.long, device=self.device
             )
-        unknown = [name for name in cfg.selectable_target_names if name not in name_to_idx]
-        if unknown:
-            raise ValueError(f"Unknown selectable target blocks: {unknown}")
-        selectable = [name_to_idx[name] for name in cfg.selectable_target_names]
+        selectable = [
+            name_to_idx[name]
+            for name in cfg.selectable_target_names
+            if name in name_to_idx and name not in MISSING_BLOCK_CANDIDATES
+        ]
         self._selectable = torch.tensor(selectable, dtype=torch.long, device=self.device)
         self._num_selectable = int(self._selectable.numel())
         if self._num_selectable == 0:
@@ -536,87 +528,6 @@ class TargetBlockCommand(CommandTerm):
         count = weights.sum(dim=1)
         mean = (values * weights).sum(dim=1) / count.clamp_min(1.0)
         return torch.where(count > 0, mean, torch.zeros_like(mean))
-
-    def set_target_block(self, block_name: str) -> None:
-        """Force the named target in every parallel environment."""
-        if block_name not in self._all_names:
-            raise ValueError(f"{block_name} is not part of _all_names")
-        block_idx = self.name_to_idx[block_name]
-        self._force_target_per_env = torch.full(
-            (self.num_envs,), block_idx, dtype=torch.long, device=self.device
-        )
-        self._resample_command(self._env_arange)
-        self._update_metrics()
-        # The target-dependent observation terms changed outside env.step().
-        self._env.observation_manager._obs_buffer = None
-
-    def rebaseline(self) -> None:
-        """Use the current single-environment tower positions as move reference."""
-        if self.num_envs != 1:
-            raise RuntimeError("Sequential rebaseline requires num_envs=1")
-        current = torch.stack(
-            [block.data.body_link_pos_w[:, 0, :] for block in self._blocks],
-            dim=0,
-        )
-        self._start_pos.copy_(current[:, 0, :])
-        self._update_metrics()
-
-    def reference_positions(self) -> torch.Tensor:
-        return self._start_pos.clone()
-
-    def restore_reference_positions(self, positions: torch.Tensor) -> None:
-        """Restore a previously captured move reference and refresh its metrics."""
-        if positions.shape != self._start_pos.shape:
-            raise ValueError(
-                "Reference-position shape mismatch: "
-                f"expected {tuple(self._start_pos.shape)}, got {tuple(positions.shape)}"
-            )
-        self._start_pos.copy_(
-            positions.to(device=self.device, dtype=self._start_pos.dtype)
-        )
-        self._update_metrics()
-
-    def restore_pristine_reference(self) -> None:
-        """Restore the nominal reference used at the beginning of a new game."""
-        self._start_pos.copy_(self._pristine_start_pos)
-        self._update_metrics()
-
-    def absolute_tower_state(self, env_idx: int = 0) -> dict[str, object]:
-        """Return an action-independent, JSON-ready physical tower snapshot."""
-        if not 0 <= env_idx < self.num_envs:
-            raise IndexError(f"Environment index out of range: {env_idx}")
-        poses = torch.stack(
-            [block.data.body_link_pose_w[env_idx, 0, :] for block in self._blocks]
-        )
-        velocities = torch.stack(
-            [block.data.body_link_vel_w[env_idx, 0, :] for block in self._blocks]
-        )
-        present = self._present_by_block()[env_idx]
-        return {
-            "block_names": list(self._all_names),
-            "positions": poses[:, :3].detach().cpu().tolist(),
-            "quaternions": poses[:, 3:7].detach().cpu().tolist(),
-            "linear_velocities": velocities[:, :3].detach().cpu().tolist(),
-            "angular_velocities": velocities[:, 3:6].detach().cpu().tolist(),
-            "present": present.detach().cpu().tolist(),
-        }
-
-    def absolute_tower_state_tensor(self) -> torch.Tensor:
-        """Return action-independent per-block state as ``(env, block, feature)``."""
-        poses = torch.stack(
-            [block.data.body_link_pose_w[:, 0, :] for block in self._blocks],
-            dim=1,
-        )
-        velocities = torch.stack(
-            [block.data.body_link_vel_w[:, 0, :] for block in self._blocks],
-            dim=1,
-        )
-        present = self._present_by_block().unsqueeze(-1)
-        present = present.to(dtype=poses.dtype)
-
-        state = torch.cat((poses, velocities, present), dim=-1)
-
-        return state
 
     def _present_by_block(self) -> torch.Tensor:
         present = torch.ones(
@@ -784,14 +695,14 @@ class TargetBlockCommand(CommandTerm):
         if num_resets == 0:
             return
 
-        present = self._present_by_block()[env_ids]
         if self._force_target_per_env is not None:
             selected = self._force_target_per_env[env_ids]
             use_random = torch.ones(num_resets, dtype=torch.bool, device=self.device)
         elif self._force_target_idx is None:
             random_probability = random_target_block_scale(self._env)
             use_random = torch.rand(num_resets, device=self.device) < random_probability
-            envs_without_missing = present.all(dim=1)
+            present_by_block = self._present_by_block()
+            envs_without_missing = present_by_block[env_ids].all(dim=1)
             allow_random_with_missing = (
                 torch.rand(num_resets, device=self.device)
                 < random_target_with_missing_scale(self._env)
@@ -804,19 +715,12 @@ class TargetBlockCommand(CommandTerm):
                 device=self.device,
             )
             if torch.any(use_random):
-                available = present[use_random][:, self._selectable]
-                if not torch.all(available.any(dim=1)):
-                    raise ValueError("No selectable target is present in a reset environment.")
-                if torch.all(available):
-                    random_choices = torch.randint(
-                        0,
-                        self._num_selectable,
-                        (int(use_random.sum().item()),),
-                        device=self.device,
-                    )
-                else:
-                    # Reset events have already sampled the actual missing pattern.
-                    random_choices = torch.multinomial(available.float(), 1).squeeze(1)
+                random_choices = torch.randint(
+                    0,
+                    self._num_selectable,
+                    (int(use_random.sum().item()),),
+                    device=self.device,
+                )
                 selected[use_random] = self._selectable[random_choices]
         else:
             use_random = torch.ones(num_resets, dtype=torch.bool, device=self.device)
@@ -827,8 +731,6 @@ class TargetBlockCommand(CommandTerm):
                 device=self.device,
             )
 
-        if not torch.all(present.gather(1, selected.unsqueeze(1))):
-            raise ValueError("The fixed or forced target is missing in a reset environment.")
         self.selected_block_idx[env_ids] = selected
         self.selected_is_random[env_ids] = use_random
 
@@ -887,9 +789,7 @@ class TargetBlockCommand(CommandTerm):
 @dataclass(kw_only=True)
 class TargetBlockCommandCfg(CommandTermCfg):
     fixed_target_name: str = FIXED_TARGET_BLOCK_NAME
-    selectable_target_names: tuple[str, ...] = field(
-        default_factory=lambda: RANDOM_TARGET_BLOCK_NAMES
-    )
+    selectable_target_names: tuple[str, ...] = RANDOM_TARGET_BLOCK_NAMES
     force_target_name: str | None = None
     force_target_names: tuple[str, ...] = ()
     """Per-env forced targets, cycled over the envs. Lets one vectorized rollout cover
@@ -988,82 +888,15 @@ def _ensure_missing_block_state(env: ManagerBasedRlEnv) -> torch.Tensor:
     return env._jenga_missing_block_mask
 
 
-def _ensure_play_removed_block_state(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """Return the per-environment mask for blocks removed during sequential play."""
-    if not hasattr(env, "_jenga_play_removed_block_mask"):
-        env._jenga_play_removed_block_mask = torch.zeros(
-            env.num_envs,
-            LAYERS * BLOCKS_PER_LAYER,
-            dtype=torch.bool,
-            device=env.device,
-        )
-    return env._jenga_play_removed_block_mask
-
-
-def _tower_block_index(block_name: str) -> int | None:
-    """Map a configured block name to its fixed tower slot."""
-    try:
-        layer_text, slot_text = block_name.removeprefix("b").split("_", maxsplit=1)
-        layer = int(layer_text)
-        slot = int(slot_text)
-    except (ValueError, AttributeError):
-        return None
-    if not 1 <= layer <= LAYERS or not 1 <= slot <= BLOCKS_PER_LAYER:
-        return None
-    return (layer - 1) * BLOCKS_PER_LAYER + slot - 1
-
-
 def current_missing_block_mask(
     env: ManagerBasedRlEnv,
     block_name: str,
 ) -> torch.Tensor:
-    missing = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    mask = getattr(env, "_jenga_missing_block_mask", None)
+    if mask is None or block_name not in MISSING_BLOCK_CANDIDATES:
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-    randomized_mask = getattr(env, "_jenga_missing_block_mask", None)
-    if randomized_mask is not None and block_name in MISSING_BLOCK_CANDIDATES:
-        missing |= randomized_mask[:, MISSING_BLOCK_CANDIDATES.index(block_name)]
-
-    play_mask = getattr(env, "_jenga_play_removed_block_mask", None)
-    block_idx = _tower_block_index(block_name)
-    if play_mask is not None and block_idx is not None:
-        missing |= play_mask[:, block_idx]
-
-    return missing
-
-
-def remove_block_from_tower(
-    env: ManagerBasedRlEnv,
-    block_name: str,
-    env_ids: torch.Tensor | slice | None = None,
-) -> None:
-    """Park a block and mark it absent without resetting the rest of the tower."""
-    block_idx = _tower_block_index(block_name)
-    if block_idx is None:
-        raise ValueError(f"Unknown Jenga block: {block_name}")
-    try:
-        asset: Entity = env.scene[block_name]
-    except KeyError as exc:
-        raise ValueError(f"Unknown Jenga block: {block_name}") from exc
-
-    if env_ids is None:
-        env_ids = torch.arange(env.num_envs, device=env.device)
-    elif isinstance(env_ids, slice):
-        env_ids = torch.arange(env.num_envs, device=env.device)[env_ids]
-
-    removed_mask = _ensure_play_removed_block_state(env)
-    removed_mask[env_ids, block_idx] = True
-
-    root_state = asset.data.default_root_state[env_ids].clone()
-    park_offset = torch.tensor(
-        PLAY_REMOVED_BLOCK_PARK_OFFSET,
-        device=env.device,
-        dtype=root_state.dtype,
-    )
-    park_offset[0] += MISSING_BLOCK_PARK_SPACING * block_idx
-    root_state[:, :3] += park_offset
-    root_state[:, 7:] = 0.0
-    asset.write_root_state_to_sim(root_state, env_ids=env_ids)
-    env.sim.forward()
+    return mask[:, MISSING_BLOCK_CANDIDATES.index(block_name)]
 
 
 def missing_pattern_count_summary(env: ManagerBasedRlEnv, max_items: int = 6) -> str:
@@ -1121,9 +954,6 @@ def randomize_missing_blocks(
 
     missing_mask = _ensure_missing_block_state(env)
     missing_mask[env_ids] = False
-    play_removed_mask = getattr(env, "_jenga_play_removed_block_mask", None)
-    if play_removed_mask is not None:
-        play_removed_mask[env_ids] = False
     env._jenga_missing_pattern_id[env_ids] = pattern_ids
 
     base_park_offset = torch.tensor(

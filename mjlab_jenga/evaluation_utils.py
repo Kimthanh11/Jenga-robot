@@ -52,16 +52,6 @@ def block_layer(name: str) -> int:
         raise ValueError(f"Invalid block name: {name!r}") from exc
 
 
-def illegal_targets(names: Iterable[str], cfg) -> tuple[str, ...]:
-    """Return the names that the top-layer rule forbids as targets.
-
-    Play may only remove blocks below the highest completed story, so the top layer is
-    never a legal target. Those blocks stay in the tower -- they are the load that makes
-    the layer below them the hardest legal target -- but must never be selected.
-    """
-    return tuple(name for name in names if block_layer(name) >= cfg.LAYERS)
-
-
 def target_groups(cfg) -> dict[str, tuple[str, ...]]:
     """Build the named target sets used by training and evaluation."""
     tower = tuple(
@@ -83,16 +73,8 @@ def target_groups(cfg) -> dict[str, tuple[str, ...]]:
     }
 
 
-def resolve_targets(
-    value: str, cfg, *, allow_duplicates: bool = False
-) -> tuple[str, tuple[str, ...]]:
-    """Resolve a named target set or a comma-separated explicit block list.
-
-    Duplicates are rejected by default: in an evaluation a repeated block would be
-    measured twice under the same scenario identifier. Training passes
-    ``allow_duplicates=True``, where repeating a name deliberately raises that target's
-    share of the sampled episodes.
-    """
+def resolve_targets(value: str, cfg) -> tuple[str, tuple[str, ...]]:
+    """Resolve a named target set or a comma-separated explicit block list."""
     selector = value.strip().lower().replace("_", "-")
     groups = target_groups(cfg)
     if selector == "all":
@@ -109,7 +91,7 @@ def resolve_targets(
     unknown = sorted(set(requested) - set(groups["tower"]))
     if unknown:
         raise ValueError(f"Unknown target blocks: {unknown}")
-    if not allow_duplicates and len(set(requested)) != len(requested):
+    if len(set(requested)) != len(requested):
         raise ValueError("Target list contains duplicates.")
     return "explicit", requested
 
@@ -258,7 +240,7 @@ def summarize_episode_rows(rows: list[dict]) -> dict:
     extraction_low, extraction_high = wilson_interval(extractions, total)
     damage_low, damage_high = wilson_interval(damages, total)
     first = rows[0]
-    summary = {
+    return {
         "controller": first["controller"],
         "checkpoint": first["checkpoint"],
         "commit": first["commit"],
@@ -297,15 +279,3 @@ def summarize_episode_rows(rows: list[dict]) -> dict:
         "stop_rate": mean(rows, "stop_rate"),
         "retreat_rate": mean(rows, "retreat_rate"),
     }
-    if "reached_success" in first:
-        # Settling-period evaluation: success_rate above is judged after settling.
-        reached = bool_count(rows, "reached_success")
-        reached_low, reached_high = wilson_interval(reached, total)
-        summary["settle_steps"] = first["settle_steps"]
-        summary["reached_success_rate"] = reached / total
-        summary["reached_success_ci95_low"] = reached_low
-        summary["reached_success_ci95_high"] = reached_high
-        summary["damaged_after_success_rate"] = (
-            bool_count(rows, "damaged_after_success") / total
-        )
-    return summary

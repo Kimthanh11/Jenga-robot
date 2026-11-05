@@ -7,11 +7,6 @@ import argparse
 import mjlab_jenga.jenga_mjenv_cfg as cfg
 from mjlab.scripts.train import TrainConfig, launch_training
 from mjlab.tasks.registry import register_mjlab_task
-from mjlab_jenga.evaluation_utils import (
-    TARGET_SELECTOR_NAMES,
-    illegal_targets,
-    resolve_targets,
-)
 
 
 def main() -> None:
@@ -55,19 +50,9 @@ def main() -> None:
     parser.add_argument(
         "--targets",
         default=None,
-        help="Target blocks overriding RANDOM_TARGET_BLOCK_NAMES: either a named set "
-        f"({', '.join(TARGET_SELECTOR_NAMES)}) or a comma-separated block list. "
+        help="Comma-separated target blocks, overriding RANDOM_TARGET_BLOCK_NAMES. "
         "Repeating a name raises its sampling share, which is how a target the policy "
         "has written off can be given a concentrated signal without dropping the rest.",
-    )
-    parser.add_argument(
-        "--allow-illegal-targets",
-        action="store_true",
-        help="Permit top-layer blocks as targets. Standard play may only remove blocks "
-        "below the highest completed story, so these are illegal moves. They also "
-        "conflict with the layer below: the two are adjacent in the normalized layer "
-        "feature but mechanically opposite, because nothing rests on the top layer. "
-        "Only for deliberate ablations.",
     )
     parser.add_argument(
         "--yaw-limit",
@@ -84,13 +69,6 @@ def main() -> None:
         "abandoned. Warm-start from a base checkpoint widened by "
         "scripts/widen_checkpoint_for_abort.py.",
     )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Seed for PPO and the environment. Unset keeps the runner default of 42, "
-        "which every run before independent-seed repetitions used.",
-    )
     parser.add_argument("--run-suffix", default=None)
     args = parser.parse_args()
 
@@ -106,20 +84,10 @@ def main() -> None:
     if args.yaw_limit is not None:
         cfg.YAW_TARGET_LIMIT = args.yaw_limit
     cfg.TOWER_SHIFT_RELATIVE_TO_BASE = args.base_relative_shift
-    # Resolve against the current defaults before overwriting them, so that a named set
-    # such as trained-legal means what it meant at the start of this run.
-    target_set = None
     if args.targets:
-        target_set, resolved = resolve_targets(args.targets, cfg, allow_duplicates=True)
-        forbidden = sorted(set(illegal_targets(resolved, cfg)))
-        if forbidden and not args.allow_illegal_targets:
-            parser.error(
-                f"--targets {args.targets!r} resolves to blocks that the top-layer "
-                f"rule forbids as targets: {', '.join(forbidden)}. They remain in the "
-                "tower as load; they are just not selectable. Pass "
-                "--allow-illegal-targets to override."
-            )
-        cfg.RANDOM_TARGET_BLOCK_NAMES = resolved
+        cfg.RANDOM_TARGET_BLOCK_NAMES = tuple(
+            t.strip() for t in args.targets.split(",") if t.strip()
+        )
     # The abort variant shares these globals with the base configuration.
     task = cfg
     if args.abort:
@@ -134,8 +102,6 @@ def main() -> None:
     agent_cfg.max_iterations = args.iterations
     if args.entropy_coef is not None:
         agent_cfg.algorithm.entropy_coef = args.entropy_coef
-    if args.seed is not None:
-        agent_cfg.seed = args.seed
 
     run_name = f"low_level_{args.stage}"
     if args.entropy_coef is not None:
@@ -151,14 +117,7 @@ def main() -> None:
     if args.base_relative_shift:
         run_name += "_baseshift"
     if args.targets:
-        label = (
-            target_set
-            if target_set != "explicit"
-            else "tgt%d" % len(cfg.RANDOM_TARGET_BLOCK_NAMES)
-        )
-        run_name += "_" + label.replace("-", "")
-    if args.seed is not None:
-        run_name += f"_s{args.seed}"
+        run_name += "_tgt%d" % len(cfg.RANDOM_TARGET_BLOCK_NAMES)
     if args.run_suffix:
         run_name += f"_{args.run_suffix}"
     agent_cfg.run_name = run_name
@@ -169,10 +128,8 @@ def main() -> None:
         f"success_curriculum_steps={cfg.SUCCESS_CURRICULUM_STEPS} "
         f"yaw_curriculum=({cfg.YAW_CURRICULUM_START},{cfg.YAW_CURRICULUM_END}) "
         f"base_relative_shift={cfg.TOWER_SHIFT_RELATIVE_TO_BASE} "
-        f"target_set={target_set or 'default'} "
         f"targets={cfg.RANDOM_TARGET_BLOCK_NAMES} "
         f"yaw_target_limit={cfg.YAW_TARGET_LIMIT} "
-        f"seed={agent_cfg.seed} "
         f"num_envs={args.num_envs} iterations={args.iterations}",
         flush=True,
     )
