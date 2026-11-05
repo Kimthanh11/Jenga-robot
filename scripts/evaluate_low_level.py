@@ -50,6 +50,12 @@ def _terminal_reason(env: ManagerBasedRlEnv, env_id: int, abort_enabled: bool) -
     return "terminated"
 
 
+def _action_column(env: ManagerBasedRlEnv, term_name: str) -> int:
+    """Index of the first column that the named action term reads."""
+    manager = env.action_manager
+    return sum(manager.action_term_dim[: manager.active_terms.index(term_name)])
+
+
 def _episode_row(
     *,
     env: ManagerBasedRlEnv,
@@ -76,6 +82,7 @@ def _episode_row(
     episode_step_cap: int,
     freeze_yaw: bool,
     abort_enabled: bool,
+    extra: dict | None = None,
 ) -> dict:
     pattern_id = int(env._jenga_missing_pattern_id[env_id].item())
     steps = max(int(episode_steps[env_id].item()), 1)
@@ -135,6 +142,7 @@ def _episode_row(
         "stuck_rate": float(stuck_steps[env_id].item()) / steps,
         "stop_rate": float(stop_steps[env_id].item()) / steps,
         "retreat_rate": float(retreat_steps[env_id].item()) / steps,
+        **(extra or {}),
     }
 
 
@@ -154,6 +162,7 @@ def _run_policy_batch(
     max_steps: int,
     freeze_yaw: bool,
     abort_enabled: bool,
+    settle_steps: int = 0,
 ) -> list[dict]:
     cfg.FORCED_MISSING_PATTERN_OFFSET = batch_index * env.num_envs
     reset_seed = evaluation_seed(base_seed, batch_index)
@@ -174,17 +183,40 @@ def _run_policy_batch(
     stuck_steps = torch.zeros(env.num_envs, device=env.device)
     stop_steps = torch.zeros(env.num_envs, device=env.device)
     retreat_steps = torch.zeros(env.num_envs, device=env.device)
+    # Only used with a settling period, where success no longer ends the episode. The
+    # step at which success was first reached (-1 before), and the action held from then
+    # on until the tower is judged again settle_steps later.
+    success_step = torch.full((env.num_envs,), -1, dtype=torch.long, device=env.device)
+    hold_actions: torch.Tensor | None = None
+    push_column = _action_column(env, "push_stop_retreat")
     rows: list[dict] = []
+
+    def settle_extra(env_id: int, settled: bool) -> dict | None:
+        if settle_steps <= 0:
+            return None
+        reached = int(success_step[env_id].item()) >= 0
+        return {
+            "settle_steps": settle_steps,
+            "success_step": int(success_step[env_id].item()),
+            "reached_success": reached,
+            "safe_after_settle": settled
+            and bool(cfg.success_block_extract(env)[env_id].item()),
+            "damaged_after_success": reached
+            and bool(cfg.tower_damage_signal(env)[env_id].item()),
+        }
 
     # mjlab mutates tensors during reset, which is incompatible with inference_mode.
     with torch.no_grad():
-        for _ in range(max_steps):
+        for _ in range(max_steps + settle_steps):
             live = active & ~finished
             if not bool(live.any().item()):
                 break
 
             actions = policy(obs).clone()
             actions[~live] = 0.0
+            if hold_actions is not None:
+                holding = success_step >= 0
+                actions[holding] = hold_actions[holding]
             obs, _, dones, _ = wrapped.step(actions)
 
             progress = cfg.block_progress(env)
@@ -206,8 +238,41 @@ def _run_policy_batch(
             stop_steps[live] += cfg.stop_action_fraction(env)[live]
             retreat_steps[live] += cfg.retreat_action_fraction(env)[live]
 
-            first_done = torch.nonzero(dones & live, as_tuple=False).squeeze(-1)
+            ended = dones.bool()
+            settled = torch.zeros_like(live)
+            expired = torch.zeros_like(live)
+            if settle_steps > 0:
+                if hold_actions is None:
+                    hold_actions = torch.zeros_like(actions)
+                # A success after the regular step cap would not have counted without
+                # the extension, so it does not count here either.
+                reached_now = (
+                    cfg.success_block_extract(env)
+                    & live
+                    & (success_step < 0)
+                    & (episode_steps <= max_steps)
+                )
+                success_step[reached_now] = episode_steps[reached_now].long()
+                # Stop pushing but keep the contact point and yaw. A zero action would
+                # not hold the hook still: the contact action is a position on the
+                # block face, and zero is the centre of that face.
+                hold_actions[reached_now] = actions[reached_now]
+                hold_actions[reached_now, push_column] = 0.0
+                elapsed = episode_steps.long() - success_step
+                settled = live & (success_step >= 0) & (elapsed >= settle_steps) & ~ended
+                # The regular time limit, which the extended episode no longer enforces.
+                expired = live & (success_step < 0) & (episode_steps >= max_steps) & ~ended
+
+            first_done = torch.nonzero(
+                (ended | settled | expired) & live, as_tuple=False
+            ).squeeze(-1)
             for env_id in first_done.tolist():
+                is_settled = bool(settled[env_id].item())
+                extra = settle_extra(env_id, is_settled)
+                if is_settled:
+                    extra["reason"] = "settled"
+                elif bool(expired[env_id].item()):
+                    extra["reason"] = "timeout"
                 rows.append(
                     _episode_row(
                         env=env,
@@ -234,6 +299,7 @@ def _run_policy_batch(
                         episode_step_cap=max_steps,
                         freeze_yaw=freeze_yaw,
                         abort_enabled=abort_enabled,
+                        extra=extra,
                     )
                 )
             finished[first_done] = True
@@ -271,6 +337,7 @@ def _run_policy_batch(
             episode_step_cap=max_steps,
             freeze_yaw=freeze_yaw,
             abort_enabled=abort_enabled,
+            extra=settle_extra(env_id, settled=False),
         )
         row["reason"] = "step_cap"
         rows.append(row)
@@ -299,6 +366,7 @@ def _evaluate_case(
     cone: str | None,
     freeze_yaw: bool,
     abort_enabled: bool,
+    settle_steps: int = 0,
 ) -> list[dict]:
     configure_evaluation_case(cfg, target, missing_level)
     vector_size = min(num_envs, episodes_per_seed)
@@ -307,6 +375,16 @@ def _evaluate_case(
     env_cfg.auto_reset = False
     env_cfg.observations["actor"].enable_corruption = False
     env_cfg.commands["target_block"].force_target_name = target
+    if settle_steps > 0:
+        # Success must not end the episode, or there is nothing left to observe. The
+        # loop detects success itself and judges the tower again after settle_steps.
+        # Damage stays a termination, so a collapse during settling is still recorded.
+        env_cfg.terminations.pop("success", None)
+        # Room for a success on the last regular step to finish settling. The loop
+        # enforces the regular limit itself, so the environment's own limit must never
+        # fire first; one spare step covers rounding in the step count.
+        step_dt = env_cfg.decimation * env_cfg.sim.mujoco.timestep
+        env_cfg.episode_length_s += (settle_steps + 1) * step_dt
     if impratio is not None:
         env_cfg.sim.mujoco.impratio = impratio
     if cone is not None:
@@ -350,6 +428,7 @@ def _evaluate_case(
                         max_steps=max_steps,
                         freeze_yaw=freeze_yaw,
                         abort_enabled=abort_enabled,
+                        settle_steps=settle_steps,
                     )
                 )
                 remaining -= active_count
@@ -397,10 +476,22 @@ def main() -> None:
     parser.add_argument("--abort", action="store_true")
     parser.add_argument("--impratio", type=float)
     parser.add_argument("--cone")
+    parser.add_argument(
+        "--settle-steps",
+        type=int,
+        default=0,
+        help="Control steps to keep simulating after success before judging the tower "
+        "again. The push stops, contact point and yaw are held. Success normally ends "
+        "the episode at once, which cannot catch a tower that falls a moment later. "
+        "success_rate then means safe after settling; reached_success_rate is the "
+        "rate at the moment of success. 0 keeps the regular protocol.",
+    )
     args = parser.parse_args()
 
     if args.episodes_per_seed <= 0 or args.num_envs <= 0 or args.max_steps <= 0:
         parser.error("episodes, num-envs, and max-steps must be positive")
+    if args.settle_steps < 0:
+        parser.error("settle-steps must not be negative")
     if any(level < 0 or level > 3 for level in args.missing_levels):
         parser.error("missing levels must be between 0 and 3")
     checkpoint = Path(args.checkpoint)
@@ -460,17 +551,24 @@ def main() -> None:
                 cone=args.cone,
                 freeze_yaw=args.freeze_yaw,
                 abort_enabled=args.abort,
+                settle_steps=args.settle_steps,
             )
             summary = summarize_episode_rows(rows)
             append_rows(args.episodes_csv, rows)
             append_rows(summary_path, [summary])
+            settle = (
+                f" reached={summary['reached_success_rate']:.3f} "
+                f"damaged_after={summary['damaged_after_success_rate']:.3f}"
+                if args.settle_steps > 0
+                else ""
+            )
             print(
                 f"{target:>5} missing={missing_level} n={summary['episodes']} "
                 f"extracted={summary['extraction_rate']:.3f} "
                 f"success={summary['success_rate']:.3f} "
                 f"damage={summary['tower_damage_rate']:.3f} "
                 f"progress={summary['progress_max_mean']:.4f} "
-                f"steps={summary['episode_length_mean']:.1f}",
+                f"steps={summary['episode_length_mean']:.1f}{settle}",
                 flush=True,
             )
 

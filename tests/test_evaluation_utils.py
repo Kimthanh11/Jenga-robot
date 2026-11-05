@@ -13,8 +13,10 @@ SPEC.loader.exec_module(evaluation_utils)
 
 configure_evaluation_case = evaluation_utils.configure_evaluation_case
 evaluation_seed = evaluation_utils.evaluation_seed
+illegal_targets = evaluation_utils.illegal_targets
 resolve_targets = evaluation_utils.resolve_targets
 scenario_id = evaluation_utils.scenario_id
+summarize_episode_rows = evaluation_utils.summarize_episode_rows
 target_groups = evaluation_utils.target_groups
 valid_missing_pattern_ids = evaluation_utils.valid_missing_pattern_ids
 wilson_interval = evaluation_utils.wilson_interval
@@ -69,6 +71,23 @@ class EvaluationUtilsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown"):
             resolve_targets("b10_1", self.cfg)
 
+    def test_illegal_targets_are_exactly_the_top_layer(self) -> None:
+        groups = target_groups(self.cfg)
+        self.assertEqual(illegal_targets(groups["legal"], self.cfg), ())
+        self.assertEqual(
+            illegal_targets(groups["trained"], self.cfg),
+            ("b9_1", "b9_2", "b9_3"),
+        )
+        self.assertEqual(len(illegal_targets(groups["tower"], self.cfg)), 3)
+
+    def test_duplicate_targets_need_an_explicit_opt_in(self) -> None:
+        # Evaluation would measure the repeated block twice under one scenario id;
+        # training uses repetition to raise a target's sampling share.
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            resolve_targets("b2_1,b2_1", self.cfg)
+        _, targets = resolve_targets("b2_1,b2_1", self.cfg, allow_duplicates=True)
+        self.assertEqual(targets, ("b2_1", "b2_1"))
+
     def test_missing_patterns_keep_target_present(self) -> None:
         pattern_ids = valid_missing_pattern_ids(self.cfg, "b5_2", 1)
         self.assertEqual(pattern_ids, (1, 2))
@@ -95,6 +114,52 @@ class EvaluationUtilsTest(unittest.TestCase):
         self.assertLess(low, 0.5)
         self.assertGreater(high, 0.5)
         self.assertEqual(wilson_interval(0, 0), (0.0, 0.0))
+
+    def test_settling_summary_separates_success_at_the_moment_from_after(self) -> None:
+        # Two attempts reach success; one of those towers fails while settling.
+        outcomes = (
+            {"reached_success": True, "safe_success": True, "damaged_after_success": False},
+            {"reached_success": True, "safe_success": False, "damaged_after_success": True},
+            {"reached_success": False, "safe_success": False, "damaged_after_success": False},
+        )
+        rows = [_episode(**outcome, settle_steps=100) for outcome in outcomes]
+        summary = summarize_episode_rows(rows)
+        self.assertAlmostEqual(summary["reached_success_rate"], 2 / 3)
+        self.assertAlmostEqual(summary["success_rate"], 1 / 3)
+        self.assertAlmostEqual(summary["damaged_after_success_rate"], 1 / 3)
+        self.assertEqual(summary["settle_steps"], 100)
+
+    def test_regular_summary_has_no_settling_columns(self) -> None:
+        summary = summarize_episode_rows([_episode(safe_success=True)])
+        self.assertNotIn("reached_success_rate", summary)
+        self.assertEqual(summary["success_rate"], 1.0)
+
+
+def _episode(**overrides) -> dict:
+    row = {
+        "controller": "policy",
+        "checkpoint": "model.pt",
+        "commit": "abc",
+        "target_set": "explicit",
+        "target": "b2_1",
+        "layer": 2,
+        "is_trained": True,
+        "is_legal": True,
+        "missing_level": 0,
+        "safe_success": False,
+        "extracted": False,
+        "tower_damage": False,
+    }
+    for key in (
+        "progress_final", "progress_max", "steps", "tower_xy_final", "tower_xy_max",
+        "tower_xy_recovery", "tower_z_final", "tower_z_max", "tower_z_recovery",
+        "tower_rot_deg_final", "tower_rot_deg_max", "tower_rot_deg_recovery",
+        "contact_rate", "contact_force_mean", "contact_force_max", "stuck_rate",
+        "stop_rate", "retreat_rate",
+    ):
+        row[key] = 0.0
+    row.update(overrides)
+    return row
 
 
 if __name__ == "__main__":
